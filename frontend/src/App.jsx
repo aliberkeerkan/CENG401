@@ -1,3 +1,4 @@
+// Umut tarafindan test amaciyla eklendi
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { upload, processImage, registerSample, onRequest } from "./api.js";
 import { applyOp, stats, sampleImage } from "./imageOps.js";
