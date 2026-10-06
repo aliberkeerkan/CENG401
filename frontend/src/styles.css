@@ -63,6 +63,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .status { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; color: var(--muted);
   border: 1px solid var(--line); border-radius: 999px; padding: 0.3rem 0.75rem; background: var(--panel); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #c99a1a; }
+.status.server .dot { background: #2e9b57; }
+.status.checking .dot { background: var(--muted); }
 
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
 .hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.4rem; }
@@ -82,10 +84,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .work { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1rem; align-items: start; }
 .bottom { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem; }
 
-.tool-list { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.tool { border: 0; border-radius: 0; border-right: 1px solid var(--line); padding: 0.5rem 0.3rem; font-size: 0.85rem; }
-.tool:last-child { border-right: 0; }
-.tool.on { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.tool-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem; }
+.tool { text-align: left; padding: 0.45rem 0.6rem; font-size: 0.86rem; }
+.tool.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 600; }
 
 /* the formula strip: the equation from the plan, with live values */
 .formula { margin-top: 1rem; padding: 0.9rem 0.8rem; border-left: 3px solid var(--accent);
@@ -100,6 +101,20 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .slider output { font-variant-numeric: tabular-nums; font-weight: 600; }
 .slider input { width: 100%; margin-top: 0.4rem; accent-color: var(--accent); }
 
+.export-row { display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; }
+.select { display: grid; gap: 0.25rem; font-size: 0.85rem; color: var(--muted); }
+.select select { font: inherit; font-size: 0.9rem; color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.42rem 0.5rem; }
+.select select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.grow { flex: 1; }
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 1rem; }
+.field { display: grid; gap: 0.2rem; font-size: 0.85rem; color: var(--muted); }
+.field input { font: inherit; font-size: 0.9rem; color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.4rem 0.5rem; width: 100%; font-variant-numeric: tabular-nums; }
+.field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.check { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.8rem; font-size: 0.88rem; }
+.check input { accent-color: var(--accent); }
+.select.inline { margin-top: 0.8rem; }
 .history { margin: 0; padding-left: 1.3rem; font-size: 0.9rem; }
 .history li { padding: 0.15rem 0; }
 
@@ -112,6 +127,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   background-image: linear-gradient(45deg, var(--panel) 25%, transparent 25%, transparent 75%, var(--panel) 75%),
     linear-gradient(45deg, var(--panel) 25%, transparent 25%, transparent 75%, var(--panel) 75%);
   background-size: 16px 16px; background-position: 0 0, 8px 8px; }
+.canvas-wrap { position: relative; display: inline-block; line-height: 0; max-width: 100%; }
+.crop-overlay { position: absolute; inset: 0; cursor: crosshair; overflow: hidden; touch-action: none; }
+.crop-rect { position: absolute; border: 2px solid #ffffff; outline: 1px solid rgba(0,0,0,.6);
+  box-shadow: 0 0 0 9999px rgba(10, 20, 28, 0.55); pointer-events: none; }
+.frame-foot { border-top: 1px solid var(--line); padding: 0.7rem 0.8rem 0.8rem; }
+.frame-foot .hint { margin-top: 0.35rem; }
 .frame canvas { max-width: 100%; max-height: 62vh; height: auto; display: block; image-rendering: auto; }
 
 .hist { width: 100%; height: 120px; display: block; background: var(--paper); border-radius: 4px; }

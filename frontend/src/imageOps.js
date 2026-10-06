@@ -44,7 +44,157 @@ export function contrast(src, { alpha }) {
   return out;
 }
 
-export const OPS = { grayscale, brightness, contrast };
+// ---------- geometry (Eqs. 4-5); applied to all four channels incl. alpha ----------
+
+export function crop(src, { x, y, width, height }) {
+  if (x < 0 || y < 0 || x + width > src.width || y + height > src.height) {
+    throw new Error(`Crop area ${x},${y} ${width}x${height} is outside the ${src.width}x${src.height} image.`);
+  }
+  const out = new ImageData(width, height);
+  for (let row = 0; row < height; row++) {
+    const from = ((y + row) * src.width + x) * 4;
+    out.data.set(src.data.subarray(from, from + width * 4), row * width * 4);
+  }
+  return out;
+}
+
+// pixel-centre alignment: x = (x' + 1/2) * M / M' - 1/2   (same as Python)
+function sourceCoords(nOut, nIn) {
+  const c = new Float64Array(nOut);
+  for (let i = 0; i < nOut; i++) c[i] = (i + 0.5) * (nIn / nOut) - 0.5;
+  return c;
+}
+
+export function resize(src, { width, height, method = "bilinear" }) {
+  const w = src.width, h = src.height, s = src.data;
+  const out = new ImageData(width, height), d = out.data;
+  const xs = sourceCoords(width, w), ys = sourceCoords(height, h);
+
+  if (method === "nearest") {
+    const xi = Array.from(xs, (v) => Math.min(Math.max(Math.floor(v + 0.5), 0), w - 1));
+    const yi = Array.from(ys, (v) => Math.min(Math.max(Math.floor(v + 0.5), 0), h - 1));
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++) {
+        const o = (y * width + x) * 4, i = (yi[y] * w + xi[x]) * 4;
+        d[o] = s[i]; d[o + 1] = s[i + 1]; d[o + 2] = s[i + 2]; d[o + 3] = s[i + 3];
+      }
+    return out;
+  }
+
+  for (let y = 0; y < height; y++) {
+    const yy = Math.min(Math.max(ys[y], 0), h - 1);
+    const y0 = Math.floor(yy), y1 = Math.min(y0 + 1, h - 1), b = yy - y0;
+    for (let x = 0; x < width; x++) {
+      const xx = Math.min(Math.max(xs[x], 0), w - 1);
+      const x0 = Math.floor(xx), x1 = Math.min(x0 + 1, w - 1), a = xx - x0;
+      const i00 = (y0 * w + x0) * 4, i10 = (y0 * w + x1) * 4;
+      const i01 = (y1 * w + x0) * 4, i11 = (y1 * w + x1) * 4;
+      const o = (y * width + x) * 4;
+      for (let c = 0; c < 4; c++) {
+        // Eq. (5), same evaluation order as the Python version
+        const v = (1 - a) * (1 - b) * s[i00 + c] + a * (1 - b) * s[i10 + c]
+          + (1 - a) * b * s[i01 + c] + a * b * s[i11 + c];
+        d[o + c] = clamp(Math.floor(v + 0.5));
+      }
+    }
+  }
+  return out;
+}
+
+// ---------- filters (Eqs. 10 and 33); RGB only, alpha copied ----------
+
+// border rule: reflection without repeating the edge (d c b | a b c d | c b a)
+function reflectIndex(n, r) {
+  const idx = new Int32Array(n + 2 * r);
+  const period = 2 * (n - 1);
+  for (let j = 0; j < idx.length; j++) {
+    if (n === 1) { idx[j] = 0; continue; }
+    let v = Math.abs(j - r) % period;
+    idx[j] = v >= n ? period - v : v;
+  }
+  return idx;
+}
+
+export function gaussianKernel(sigma) {
+  const r = Math.max(1, Math.ceil(3 * sigma));
+  const k = new Float64Array(2 * r + 1);
+  let sum = 0;
+  for (let t = -r; t <= r; t++) {
+    k[t + r] = Math.exp(-(t * t) / (2 * sigma * sigma));
+  }
+  for (let i = 0; i < k.length; i++) sum += k[i];
+  for (let i = 0; i < k.length; i++) k[i] = k[i] / sum;
+  return k;
+}
+
+export function gaussianBlur(src, { sigma }) {
+  const k = gaussianKernel(sigma), r = (k.length - 1) / 2;
+  const w = src.width, h = src.height, s = src.data;
+  const xi = reflectIndex(w, r), yi = reflectIndex(h, r);
+  const tmp = new Float64Array(w * h * 3);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      for (let c = 0; c < 3; c++) {
+        let acc = 0;
+        for (let i = 0; i < k.length; i++) acc = acc + k[i] * s[(y * w + xi[x + i]) * 4 + c];
+        tmp[(y * w + x) * 3 + c] = acc;
+      }
+  const out = new ImageData(w, h), d = out.data;
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      for (let c = 0; c < 3; c++) {
+        let acc = 0;
+        for (let i = 0; i < k.length; i++) acc = acc + k[i] * tmp[(yi[y + i] * w + x) * 3 + c];
+        d[(y * w + x) * 4 + c] = clamp(Math.floor(acc + 0.5));
+      }
+      d[(y * w + x) * 4 + 3] = s[(y * w + x) * 4 + 3];
+    }
+  return out;
+}
+
+// Median with a sliding histogram (Huang's algorithm): fast enough for live preview
+export function median(src, { size }) {
+  const w = src.width, h = src.height, s = src.data, r = (size - 1) / 2;
+  const half = (size * size + 1) / 2;
+  const xi = reflectIndex(w, r), yi = reflectIndex(h, r);
+  const out = new ImageData(w, h), d = out.data;
+  const hist = new Int32Array(256);
+  for (let i = 3; i < s.length; i += 4) d[i] = s[i];
+  for (let c = 0; c < 3; c++) {
+    for (let y = 0; y < h; y++) {
+      hist.fill(0);
+      for (let dy = 0; dy < size; dy++) {
+        const row = yi[y + dy] * w;
+        for (let dx = 0; dx < size; dx++) hist[s[(row + xi[dx]) * 4 + c]]++;
+      }
+      let m = 0, lt = 0;
+      while (lt + hist[m] < half) { lt += hist[m]; m++; }
+      d[(y * w) * 4 + c] = m;
+      for (let x = 1; x < w; x++) {
+        const colOut = xi[x - 1], colIn = xi[x + size - 1];
+        for (let dy = 0; dy < size; dy++) {
+          const row = yi[y + dy] * w;
+          const vOut = s[(row + colOut) * 4 + c];
+          hist[vOut]--; if (vOut < m) lt--;
+          const vIn = s[(row + colIn) * 4 + c];
+          hist[vIn]++; if (vIn < m) lt++;
+        }
+        if (lt >= half) {
+          do { m--; lt -= hist[m]; } while (lt >= half);
+        } else {
+          while (lt + hist[m] < half) { lt += hist[m]; m++; }
+        }
+        d[(y * w + x) * 4 + c] = m;
+      }
+    }
+  }
+  return out;
+}
+
+export const OPS = {
+  crop, resize, grayscale, brightness, contrast,
+  gaussian_blur: gaussianBlur, median,
+};
 
 export function applyOp(img, op) {
   return OPS[op.type](img, op.params || {});
