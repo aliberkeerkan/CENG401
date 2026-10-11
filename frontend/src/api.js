@@ -84,7 +84,10 @@ async function errorMessage(r) {
   try {
     const body = await r.json();
     if (typeof body.detail === "string") return body.detail;
-    if (Array.isArray(body.detail)) return body.detail.map((d) => d.msg).join("; ");
+    // Pydantic prefixes its messages with "Value error, " — drop the prefix
+    if (Array.isArray(body.detail)) {
+      return body.detail.map((d) => d.msg.replace(/^Value error,\s*/i, "")).join("; ");
+    }
   } catch { /* not JSON */ }
   return `Request failed with status ${r.status}.`;
 }
