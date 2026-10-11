@@ -87,3 +87,126 @@ def test_median_removes_isolated_impulse():
     x[0, 0] = 0
     out = filters.median(x, 3)
     assert np.all(out == 100)
+
+
+# ---------- noise (Section 5.3) ----------
+import math  # noqa: E402
+
+from app.imaging.ops import noise  # noqa: E402
+
+FLAT = np.full((512, 512, 3), 100.0)  # far from 0 and 255, so no clipping
+
+
+def test_salt_pepper_probabilities_eq18():
+    out = noise.salt_pepper(FLAT, p_pepper=0.05, p_salt=0.10, seed=0)
+    ch = out[..., 0]
+    assert abs((ch == 0).mean() - 0.05) < 0.002
+    assert abs((ch == 255).mean() - 0.10) < 0.002
+    assert set(np.unique(ch).tolist()) == {0, 100, 255}  # others keep f
+    assert np.array_equal(out[..., 0], out[..., 1]) and np.array_equal(out[..., 1], out[..., 2])
+
+
+def test_quantization_matches_eq22():
+    f = np.arange(256, dtype=np.float64).reshape(1, 256, 1).repeat(3, axis=2)
+    for bits in range(1, 9):
+        delta = 255 / (2 ** bits - 1)
+        expected = [math.floor(delta * math.floor(v / delta + 0.5) + 0.5) for v in range(256)]
+        out = noise.quantization(f, bits)
+        assert out[0, :, 0].tolist() == expected
+        assert len(np.unique(out)) == 2 ** bits and out.max() <= 255
+        assert np.abs(out - f).max() <= delta / 2 + 0.5
+    assert np.unique(noise.quantization(f, 2)).tolist() == [0, 85, 170, 255]
+    assert np.array_equal(noise.quantization(f, 8), f)  # 8 bits: identity
+
+
+def test_rayleigh_mean_and_variance_eq24():
+    a, b = 5.0, 400.0
+    z = noise.rayleigh(FLAT, a, b, seed=0) - FLAT
+    assert z.min() >= a - 0.5  # support z >= a_R (up to rounding)
+    assert abs(z.mean() - (a + math.sqrt(math.pi * b / 4))) < 0.05
+    # rounding to integers adds variance 1/12
+    assert abs(z.var() - (b * (4 - math.pi) / 4 + 1 / 12)) / (b * (4 - math.pi) / 4) < 0.01
+
+
+def test_rayleigh_zero_mean_option():
+    z = noise.rayleigh(FLAT, 5.0, 400.0, zero_mean=True, seed=0) - FLAT
+    assert abs(z.mean()) < 0.05
+
+
+def test_uniform_mean_variance_and_bounds_eq25():
+    a, b = -20.0, 30.0
+    z = noise.uniform(FLAT, a, b, seed=0) - FLAT
+    assert z.min() >= a and z.max() <= b
+    assert abs(z.mean() - (a + b) / 2) < 0.05
+    assert abs(z.var() - ((b - a) ** 2 / 12 + 1 / 12)) / ((b - a) ** 2 / 12) < 0.01
+
+
+def test_noise_is_reproducible_with_seed():
+    x = FLAT[:32, :32]
+    for fn, kw in [(noise.salt_pepper, dict(p_pepper=0.1, p_salt=0.1)),
+                   (noise.rayleigh, dict(a=0, b=100)),
+                   (noise.uniform, dict(a=-10, b=10))]:
+        assert np.array_equal(fn(x, **kw, seed=7), fn(x, **kw, seed=7))
+        assert not np.array_equal(fn(x, **kw, seed=7), fn(x, **kw, seed=8))
+
+
+# ---------- mean filters (Section 5.4.1) ----------
+
+def _brute_force(x, size, reduce):
+    """Apply `reduce` to every size x size window, reflection border rule."""
+    r = size // 2
+    p = np.pad(x, ((r, r), (r, r), (0, 0)), mode="reflect")  # d c b | a b c d
+    out = np.empty_like(x)
+    for yy in range(x.shape[0]):
+        for xx in range(x.shape[1]):
+            for c in range(x.shape[2]):
+                out[yy, xx, c] = reduce(p[yy:yy + size, xx:xx + size, c].ravel())
+    return np.clip(np.floor(out + 0.5), 0, 255)
+
+
+RAND = np.random.default_rng(1).integers(1, 256, (7, 9, 3)).astype(np.float64)
+
+
+@pytest.mark.parametrize("size", [3, 5])
+def test_arithmetic_mean_eq27(size):
+    expected = _brute_force(RAND, size, lambda w: w.sum() / w.size)
+    assert np.array_equal(filters.arithmetic_mean(RAND, size), expected)
+
+
+@pytest.mark.parametrize("size", [3, 5])
+def test_geometric_mean_eq28(size):
+    # direct product form of Eq. (28); log-domain result may differ by
+    # float rounding at exact .5 boundaries only
+    expected = _brute_force(RAND, size, lambda w: np.prod(w) ** (1 / w.size))
+    out = filters.geometric_mean(RAND, size)
+    assert np.abs(out - expected).max() <= 1 and (out == expected).mean() > 0.95
+
+
+@pytest.mark.parametrize("size", [3, 5])
+def test_harmonic_mean_eq29(size):
+    expected = _brute_force(RAND, size, lambda w: w.size / np.sum(1 / w))
+    out = filters.harmonic_mean(RAND, size)
+    assert np.abs(out - expected).max() <= 1 and (out == expected).mean() > 0.95
+
+
+def test_mean_filters_keep_constant_image_and_order():
+    x = np.full((6, 6, 3), 77.0)
+    for fn in (filters.arithmetic_mean, filters.geometric_mean, filters.harmonic_mean):
+        assert np.array_equal(fn(x, 3), x)
+    # harmonic <= geometric <= arithmetic for positive data
+    a = filters.arithmetic_mean(RAND, 3)
+    g = filters.geometric_mean(RAND, 3)
+    h = filters.harmonic_mean(RAND, 3)
+    assert np.all(h <= g) and np.all(g <= a)
+
+
+def test_mean_filters_handle_zero_pixels():
+    x = np.full((7, 7, 3), 100.0)
+    x[3, 3] = 0  # pepper
+    for fn in (filters.geometric_mean, filters.harmonic_mean):
+        assert np.all(np.isfinite(fn(x, 3)))
+    # harmonic mean removes salt but is pulled to ~0 by pepper
+    salt = np.full((7, 7, 3), 100.0)
+    salt[3, 3] = 255
+    assert abs(filters.harmonic_mean(salt, 3)[3, 3, 0] - 100) < 15
+    assert filters.harmonic_mean(x, 3)[3, 3, 0] < 1

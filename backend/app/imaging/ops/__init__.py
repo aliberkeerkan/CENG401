@@ -13,7 +13,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import basic, filters, geometry
+from . import basic, filters, geometry, noise
 from .geometry import OperationError
 
 
@@ -31,6 +31,13 @@ OPERATIONS: dict[str, OpSpec] = {
     "contrast": OpSpec(basic.contrast),
     "gaussian_blur": OpSpec(filters.gaussian_blur),
     "median": OpSpec(filters.median),
+    "arithmetic_mean": OpSpec(filters.arithmetic_mean),
+    "geometric_mean": OpSpec(filters.geometric_mean),
+    "harmonic_mean": OpSpec(filters.harmonic_mean),
+    "salt_pepper_noise": OpSpec(noise.salt_pepper),
+    "quantization_noise": OpSpec(noise.quantization),
+    "rayleigh_noise": OpSpec(noise.rayleigh),
+    "uniform_noise": OpSpec(noise.uniform),
 }
 
 

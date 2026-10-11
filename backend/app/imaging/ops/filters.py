@@ -54,6 +54,56 @@ def gaussian_blur(rgb: np.ndarray, sigma: float) -> np.ndarray:
     return np.clip(np.floor(out + 0.5), 0, 255)
 
 
+# Added to g before ln(g) and 1/g so that zero pixels (for example pepper
+# impulses) stay finite (Section 5.4.1).
+EPS = 1e-6
+
+
+def _window_mean(x: np.ndarray, size: int) -> np.ndarray:
+    """(1/mn) * sum of x over the size x size window S_xy around each pixel.
+
+    The box sum is separable: a horizontal pass, then a vertical pass.
+    """
+    r = size // 2
+    h, w = x.shape[:2]
+
+    src = x[:, _reflect_index(w, r)]
+    tmp = np.zeros_like(x, dtype=np.float64)
+    for i in range(size):
+        tmp = tmp + src[:, i:i + w]
+
+    src = tmp[_reflect_index(h, r)]
+    out = np.zeros_like(x, dtype=np.float64)
+    for i in range(size):
+        out = out + src[i:i + h]
+
+    return out / (size * size)
+
+
+def arithmetic_mean(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Eq. (27): f^(x, y) = (1/mn) sum g(s, t) over S_xy."""
+    return np.clip(np.floor(_window_mean(rgb, size) + 0.5), 0, 255)
+
+
+def geometric_mean(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Eq. (28), in the log domain: exp((1/mn) sum ln(g(s, t) + eps)).
+
+    The direct product of mn values overflows for large windows.
+    """
+    out = np.exp(_window_mean(np.log(rgb + EPS), size))
+    return np.clip(np.floor(out + 0.5), 0, 255)
+
+
+def harmonic_mean(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Eq. (29): f^(x, y) = mn / sum 1/(g(s, t) + eps).
+
+    Works well for salt noise; a single pepper (0) pixel pulls the window
+    to ~0, as expected for the harmonic mean.
+    """
+    out = 1.0 / _window_mean(1.0 / (rgb + EPS), size)
+    return np.clip(np.floor(out + 0.5), 0, 255)
+
+
 def median(rgb: np.ndarray, size: int) -> np.ndarray:
     """Eq. (33): median over a size x size window, each channel separately."""
     out = np.empty_like(rgb)
