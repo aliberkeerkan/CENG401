@@ -184,8 +184,9 @@ function formulaTex(tool, params, img) {
       const sign = params.beta < 0 ? "-" : "+";
       return `g(x,y)=\\mathrm{clip}\\bigl(f(x,y)${sign}${Math.abs(params.beta)}\\bigr)`;
     }
+    // the output range is the full scale: s_min = 0, s_max = 255
     case "contrast":
-      return `\\begin{aligned} g&=\\mathrm{clip}\\!\\left(255\\cdot\\frac{f-r_{\\min}}{r_{\\max}-r_{\\min}}\\right)\\\\ r_{\\min}&=${params.r_min},\\; r_{\\max}=${params.r_max} \\end{aligned}`;
+      return `\\begin{aligned} s=T(r)&=\\frac{s_{\\max}-s_{\\min}}{r_{\\max}-r_{\\min}}\\cdot(r-r_{\\min})+s_{\\min}\\\\ r_{\\min}&=${params.r_min},\\; r_{\\max}=${params.r_max},\\; s_{\\min}=0,\\; s_{\\max}=255 \\end{aligned}`;
     case "gaussian_blur": {
       const n = gaussianKernel(params.sigma).length;
       return `\\begin{aligned} w(s,t)&\\propto\\exp\\!\\left(-\\frac{s^{2}+t^{2}}{2\\sigma^{2}}\\right)\\\\ \\sigma&=${fmt(params.sigma, 1)},\\;\\text{window }${n}\\times${n} \\end{aligned}`;
