@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import {
-  upload, uploadSample, processImage, exportImage, saveBlob, EXPORT_FORMATS,
+  upload, uploadFromUrl, processImage, exportImage, saveBlob, EXPORT_FORMATS,
   onRequest, onStatus, checkBackend, API_URL,
 } from "./api.js";
-import { applyOp, stats, sampleImage, gaussianKernel } from "./imageOps.js";
+import { BUILTIN_SAMPLES } from "./builtinSamples.js";
+import { applyOp, stats, gaussianKernel } from "./imageOps.js";
 
 // Tool definitions. `heavy` tools get a short delay before the preview is
-// computed so dragging a slider stays smooth. `backendOnly` tools are not
-// implemented in imageOps.js: their preview comes from the backend via
-// processImage, and they are disabled while the backend is offline.
+// computed so dragging a slider stays smooth.
 const TOOLS = {
   crop: {
     label: "Crop", eq: "4",
@@ -24,87 +25,33 @@ const TOOLS = {
   },
   brightness: {
     label: "Brightness", eq: "8",
-    sliders: [{ key: "beta", min: -100, max: 100, step: 1, name: "β (offset)" }],
+    slider: { key: "beta", min: -100, max: 100, step: 1, name: "β (offset)" },
     describe: "Adds the same offset to every pixel. Values past 0 or 255 are clipped.",
   },
   contrast: {
     label: "Contrast", eq: "9",
-    sliders: [{ key: "alpha", min: 0.2, max: 3, step: 0.05, name: "α (gain)" }],
-    describe: "Stretches intensities around the image mean c. α > 1 increases contrast.",
+    describe: "Gonzalez–Woods contrast stretch. Raise Low or lower High to compress that end; Low < 0 or High > 255 expands it and reduces contrast there.",
   },
   gaussian_blur: {
     label: "Gaussian blur", eq: "10", heavy: true,
-    sliders: [{ key: "sigma", min: 0.5, max: 10, step: 0.1, name: "σ (blur scale)" }],
+    slider: { key: "sigma", min: 0.5, max: 10, step: 0.1, name: "σ (blur scale)" },
     describe: "Averages each pixel with its neighbours using Gaussian weights. Larger σ blurs more.",
   },
   median: {
     label: "Median filter", eq: "33", heavy: true,
-    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    slider: { key: "size", min: 3, max: 15, step: 2, name: "Window size" },
     describe: "Replaces each pixel with the median of its window. Removes salt-and-pepper noise and keeps edges.",
   },
-  arithmetic_mean: {
-    label: "Mean filter", eq: "27", heavy: true, backendOnly: true,
-    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
-    describe: "Softens additive noise such as Gaussian or uniform noise, but blurs the edges too.",
+  salt_pepper: {
+    label: "Salt & pepper", eq: "SP", heavy: true,
+    describe: "Gonzalez–Woods impulse noise. Each pixel becomes black with probability P_a or white with probability P_b.",
   },
-  geometric_mean: {
-    label: "Geometric mean", eq: "28", heavy: true, backendOnly: true,
-    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
-    describe: "Like the mean filter, but preserves detail slightly better. A single 0 (pepper) pixel in the window darkens the result.",
-  },
-  harmonic_mean: {
-    label: "Harmonic mean", eq: "29", heavy: true, backendOnly: true,
-    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
-    describe: "Cleans salt noise well. With pepper noise the window is pulled towards zero and the image darkens.",
-  },
-  salt_pepper_noise: {
-    label: "Salt & pepper", eq: "18", heavy: true, backendOnly: true,
-    sliders: [
-      { key: "p_pepper", min: 0, max: 0.5, step: 0.01, name: "Pₚ (pepper)" },
-      { key: "p_salt", min: 0, max: 0.5, step: 0.01, name: "Pₛ (salt)" },
-    ],
-    describe: "Sets random pixels to black (pepper) or white (salt). Other pixels keep their value.",
-  },
-  quantization_noise: {
-    label: "Quantization noise", eq: "22", backendOnly: true,
-    sliders: [{ key: "bits", min: 1, max: 8, step: 1, name: "Bit depth B" }],
-    describe: "Not random: reduces the number of gray levels to 2^B, so low B shows banding. Filters can soften banding but cannot restore the lost levels.",
-  },
-  rayleigh_noise: {
-    label: "Rayleigh noise", eq: "24", heavy: true, backendOnly: true,
-    sliders: [
-      { key: "a", min: -100, max: 100, step: 1, name: "a (location)" },
-      { key: "b", min: 1, max: 2000, step: 10, name: "b (spread, = 2σ²)" },
-    ],
-    describe: "Its mean is positive, so it brightens the image. The zero-mean option removes that shift.",
-  },
-  uniform_noise: {
-    label: "Uniform noise", eq: "25", heavy: true, backendOnly: true,
-    sliders: [
-      { key: "a", min: -100, max: 100, step: 1, name: "a (lower bound)" },
-      { key: "b", min: -100, max: 100, step: 1, name: "b (upper bound)" },
-    ],
-    describe: "Adds noise drawn uniformly from [a, b]. A range symmetric around 0 adds no brightness shift.",
+  quantization: {
+    label: "Quantization", eq: "Q",
+    slider: { key: "bits", min: 1, max: 8, step: 1, name: "Bits b" },
+    describe: "Uniform quantizer. Fewer bits make a larger step Δ, so the error e ~ U(−Δ/2, Δ/2) is stronger. 8 bits leaves the image unchanged.",
   },
 };
-
-// tools not implemented in imageOps.js: preview comes from the backend and
-// the tool is disabled while the backend is offline
-const BACKEND_ONLY = new Set(
-  Object.entries(TOOLS).filter(([, v]) => v.backendOnly).map(([k]) => k)
-);
-
-// noise tools whose params carry a seed
-const NOISE_TOOLS = new Set(["salt_pepper_noise", "rayleigh_noise", "uniform_noise"]);
-
-const newSeed = () => Math.floor(Math.random() * 2 ** 32);
-
-// tools that have no "do nothing" value: show their default effect on open
-const PREVIEW_ON_OPEN = new Set([
-  "gaussian_blur", "median",
-  "arithmetic_mean", "geometric_mean", "harmonic_mean",
-  "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
-]);
 
 function defaultParams(tool, img) {
   const w = img ? img.width : 1, h = img ? img.height : 1;
@@ -113,18 +60,11 @@ function defaultParams(tool, img) {
       return { x: Math.round(w * 0.1), y: Math.round(h * 0.1), width: Math.max(1, Math.round(w * 0.8)), height: Math.max(1, Math.round(h * 0.8)) };
     case "resize": return { width: w, height: h, method: "bilinear", lock: true };
     case "brightness": return { beta: 0 };
-    case "contrast": return { alpha: 1 };
+    case "contrast": return { low: 0, high: 255 };
     case "gaussian_blur": return { sigma: 1.5 };
     case "median": return { size: 3 };
-    case "arithmetic_mean":
-    case "geometric_mean":
-    case "harmonic_mean": return { size: 3 };
-    // every noise step gets its own random seed when the tool is selected;
-    // the seed stays fixed while the user adjusts the other parameters
-    case "salt_pepper_noise": return { p_pepper: 0.05, p_salt: 0.05, seed: newSeed() };
-    case "quantization_noise": return { bits: 4 };
-    case "rayleigh_noise": return { a: 0, b: 400, zero_mean: false, seed: newSeed() };
-    case "uniform_noise": return { a: -20, b: 20, seed: newSeed() };
+    case "salt_pepper": return { pepper: 0.03, salt: 0.03 };
+    case "quantization": return { bits: 3 };
     default: return {};
   }
 }
@@ -132,11 +72,11 @@ function defaultParams(tool, img) {
 function isNeutral(tool, p, img) {
   if (!img) return true;
   if (tool === "brightness") return p.beta === 0;
-  if (tool === "contrast") return p.alpha === 1;
+  if (tool === "contrast") return p.low === 0 && p.high === 255;
   if (tool === "resize") return p.width === img.width && p.height === img.height;
   if (tool === "crop") return p.x === 0 && p.y === 0 && p.width === img.width && p.height === img.height;
-  if (tool === "salt_pepper_noise") return p.p_pepper === 0 && p.p_salt === 0;
-  if (tool === "quantization_noise") return p.bits === 8;
+  if (tool === "salt_pepper") return p.pepper === 0 && p.salt === 0;
+  if (tool === "quantization") return p.bits === 8;
   return false;
 }
 
@@ -149,115 +89,61 @@ function opParams(tool, p) {
 const fmt = (v, d = 2) => Number(v).toFixed(d);
 const clampInt = (v, lo, hi) => Math.min(Math.max(Math.round(Number(v) || 0), lo), hi);
 
+function MathTex({ tex, display = false }) {
+  const html = useMemo(
+    () => katex.renderToString(tex, { throwOnError: false, displayMode: display, strict: "ignore" }),
+    [tex, display],
+  );
+  return <span className="math" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 function Formula({ tool, params, pivot, img }) {
   const W = img ? img.width : 0, H = img ? img.height : 0;
+  let tex = null;
   switch (tool) {
     case "crop":
-      return (
-        <span className="math">
-          <i>g</i>(<i>x</i>,<i>y</i>) = <i>f</i>(<i>x</i> + <b>{params.x}</b>, <i>y</i> + <b>{params.y}</b>),
-          0 ≤ <i>x</i> &lt; <b>{params.width}</b>, 0 ≤ <i>y</i> &lt; <b>{params.height}</b>
-        </span>
-      );
+      tex = `g(x,y)=f(x+${params.x},\\,y+${params.y}),\\quad 0\\le x<${params.width},\\; 0\\le y<${params.height}`;
+      break;
     case "resize":
-      return params.method === "nearest" ? (
-        <span className="math">
-          <i>g</i>(<i>x</i>′,<i>y</i>′) = <i>f</i>(round(<i>x</i>), round(<i>y</i>)),
-          <i> x</i> = (<i>x</i>′ + ½)·<b>{W}</b>/<b>{params.width}</b> − ½
-        </span>
-      ) : (
-        <span className="math">
-          bilinear from <i>f</i> at <i>x</i> = (<i>x</i>′ + ½)·<b>{W}</b>/<b>{params.width}</b> − ½,
-          <i> y</i> = (<i>y</i>′ + ½)·<b>{H}</b>/<b>{params.height}</b> − ½
-        </span>
-      );
+      tex = params.method === "nearest"
+        ? `\\begin{aligned} g(x',y')&=f(\\mathrm{round}(x),\\mathrm{round}(y))\\\\ x&=(x'+\\tfrac12)\\cdot\\frac{${W}}{${params.width}}-\\tfrac12 \\end{aligned}`
+        : `\\begin{aligned} x&=(x'+\\tfrac12)\\cdot\\frac{${W}}{${params.width}}-\\tfrac12\\\\ y&=(y'+\\tfrac12)\\cdot\\frac{${H}}{${params.height}}-\\tfrac12 \\end{aligned}`;
+      break;
     case "grayscale":
-      return <span className="math"><i>Y</i> = 0.299<i>R</i> + 0.587<i>G</i> + 0.114<i>B</i></span>;
-    case "brightness":
-      return (
-        <span className="math">
-          <i>g</i>(<i>x</i>,<i>y</i>) = clip(<i>f</i>(<i>x</i>,<i>y</i>) {params.beta < 0 ? "−" : "+"} <b>{Math.abs(params.beta)}</b>)
-        </span>
-      );
-    case "contrast":
-      return (
-        <span className="math">
-          <i>g</i> = clip(<b>{fmt(params.alpha)}</b>(<i>f</i> − <b>{fmt(pivot, 1)}</b>) + <b>{fmt(pivot, 1)}</b>)
-        </span>
-      );
+      tex = `Y=0.299R+0.587G+0.114B`;
+      break;
+    case "brightness": {
+      const sign = params.beta < 0 ? "-" : "+";
+      tex = `g(x,y)=\\mathrm{clip}\\bigl(f(x,y)${sign}${Math.abs(params.beta)}\\bigr)`;
+      break;
+    }
+    case "contrast": {
+      const L = fmt(params.low, 0);
+      const H = fmt(params.high, 0);
+      tex = `\\begin{aligned} g&=\\mathrm{clip}\\!\\left(\\frac{255}{${H}-${L}}(f-${L})\\right)\\\\ r_1&=${L},\\; r_2=${H} \\end{aligned}`;
+      break;
+    }
     case "gaussian_blur": {
       const n = gaussianKernel(params.sigma).length;
-      return (
-        <span className="math">
-          <i>w</i>(<i>s</i>,<i>t</i>) ∝ exp(−(<i>s</i>² + <i>t</i>²) / 2<i>σ</i>²), <i>σ</i> = <b>{fmt(params.sigma, 1)}</b>,
-          window <b>{n}×{n}</b>
-        </span>
-      );
+      tex = `\\begin{aligned} w(s,t)&\\propto\\exp\\!\\left(-\\frac{s^{2}+t^{2}}{2\\sigma^{2}}\\right)\\\\ \\sigma&=${fmt(params.sigma, 1)},\\;\\text{window }${n}\\times${n} \\end{aligned}`;
+      break;
     }
     case "median":
-      return (
-        <span className="math">
-          <i>f̂</i>(<i>x</i>,<i>y</i>) = median{"{"}<i>g</i>(<i>s</i>,<i>t</i>){"}"}, <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
-        </span>
-      );
-    case "arithmetic_mean":
-      return (
-        <span className="math">
-          <i>f̂</i>(<i>x</i>,<i>y</i>) = (1/<i>mn</i>) Σ <i>g</i>(<i>s</i>,<i>t</i>), <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
-        </span>
-      );
-    case "geometric_mean":
-      return (
-        <span className="math">
-          <i>f̂</i>(<i>x</i>,<i>y</i>) = exp((1/<i>mn</i>) Σ ln(<i>g</i>(<i>s</i>,<i>t</i>) + ε)), <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
-        </span>
-      );
-    case "harmonic_mean":
-      return (
-        <span className="math">
-          <i>f̂</i>(<i>x</i>,<i>y</i>) = <i>mn</i> / Σ 1/(<i>g</i>(<i>s</i>,<i>t</i>) + ε), <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
-        </span>
-      );
-    case "salt_pepper_noise":
-      return (
-        <span className="math">
-          <i>g</i> = 0 with prob. <i>P<sub>p</sub></i> = <b>{fmt(params.p_pepper, 2)}</b>,
-          <i> L</i>−1 with prob. <i>P<sub>s</sub></i> = <b>{fmt(params.p_salt, 2)}</b>, <i>f</i> otherwise
-        </span>
-      );
-    case "quantization_noise": {
-      const delta = 255 / (2 ** params.bits - 1);
-      return (
-        <span className="math">
-          <i>q</i>(<i>f</i>) = Δ·round(<i>f</i>/Δ), Δ = 255/(2<sup><b>{params.bits}</b></sup> − 1) ≈ <b>{fmt(delta, 2)}</b>
-        </span>
-      );
-    }
-    case "rayleigh_noise": {
-      // plan 5.3.6: the positive noise mean brightens the image, the UI
-      // must say so — show the live mean and standard deviation
-      const mean = params.a + Math.sqrt((Math.PI * params.b) / 4);
-      const std = Math.sqrt((params.b * (4 - Math.PI)) / 4);
-      return (
-        <span className="math">
-          <i>p</i>(<i>z</i>) = (2/<i>b</i>)(<i>z</i>−<i>a</i>) e<sup>−(<i>z</i>−<i>a</i>)²/<i>b</i></sup>, <i>g</i> = clip(<i>f</i> + <i>z</i>);
-          noise mean <b>{fmt(params.zero_mean ? 0 : mean, 1)}</b>, std <b>{fmt(std, 1)}</b>
-          {params.zero_mean ? " (mean subtracted)" : ""}
-        </span>
-      );
-    }
-    case "uniform_noise": {
-      const std = (params.b - params.a) / Math.sqrt(12);
-      return (
-        <span className="math">
-          <i>p</i>(<i>z</i>) = 1/(<i>b</i>−<i>a</i>) on [<b>{params.a}</b>, <b>{params.b}</b>], <i>g</i> = clip(<i>f</i> + <i>z</i>);
-          noise mean <b>{fmt((params.a + params.b) / 2, 1)}</b>, std <b>{fmt(std, 1)}</b>
-        </span>
-      );
+      tex = `\\hat{f}(x,y)=\\mathrm{median}\\{g(s,t)\\},\\; S_{xy}=${params.size}\\times${params.size}`;
+      break;
+    case "salt_pepper":
+      tex = `\\begin{aligned} p(z)&=\\begin{cases} ${fmt(params.pepper)} & z=0 \\\\ ${fmt(params.salt)} & z=255 \\\\ 1-P_a-P_b & \\text{else}\\end{cases}\\\\ g&=\\begin{cases} 0 & u<P_a \\\\ 255 & P_a\\le u<P_a+P_b \\\\ f & \\text{else}\\end{cases}\\end{aligned}`;
+      break;
+    case "quantization": {
+      const levels = 2 ** params.bits;
+      const step = params.bits >= 8 ? 1 : 255 / (levels - 1);
+      tex = `\\begin{aligned} \\Delta&=\\dfrac{255}{2^{${params.bits}}-1}=${fmt(step, 1)}\\\\ g&=\\mathrm{clip}\\!\\left(\\Delta\\cdot\\mathrm{round}(f/\\Delta)\\right)\\\\ \\sigma_e^{2}&=\\Delta^{2}/12 \\end{aligned}`;
+      break;
     }
     default:
       return null;
   }
+  return <MathTex tex={tex} display={tool === "contrast" || tool === "resize" || tool === "gaussian_blur" || tool === "salt_pepper" || tool === "quantization"} />;
 }
 
 function CropOverlay({ img, rect, onChange }) {
@@ -297,6 +183,59 @@ function CropOverlay({ img, rect, onChange }) {
         }}
       />
     </div>
+  );
+}
+
+function SampleCarousel({ index, onIndexChange, onSelect, loading, selectedId }) {
+  const n = BUILTIN_SAMPLES.length;
+  const slots = [-2, -1, 0, 1, 2].map((offset) => {
+    const i = (index + offset + n) % n;
+    return { offset, i, sample: BUILTIN_SAMPLES[i] };
+  });
+  const current = BUILTIN_SAMPLES[index];
+
+  return (
+    <section className="sample-carousel" aria-label="Built-in sample images">
+      <div className="sample-carousel-head">
+        <h3>Sample images</h3>
+        <p className="hint">Click a square to bring it forward. Click the large photo to load it.</p>
+      </div>
+      <div className="carousel">
+        <button type="button" className="carousel-nav" aria-label="Previous sample"
+          onClick={() => onIndexChange((index - 1 + n) % n)} disabled={loading}>
+          ‹
+        </button>
+        <div className="carousel-stage">
+          {slots.map(({ offset, i, sample }) => {
+            const center = offset === 0;
+            return (
+              <button
+                key={sample.id}
+                type="button"
+                className={
+                  "carousel-card" +
+                  (center ? " center" : offset === -1 || offset === 1 ? " near" : " far") +
+                  (selectedId === sample.id ? " loaded" : "")
+                }
+                aria-label={center ? `Load ${sample.label}` : `Show ${sample.label}`}
+                onClick={() => (center ? onSelect(sample) : onIndexChange(i))}
+                disabled={loading}
+              >
+                <img src={sample.url} alt={center ? sample.label : ""} draggable={false} />
+              </button>
+            );
+          })}
+        </div>
+        <button type="button" className="carousel-nav" aria-label="Next sample"
+          onClick={() => onIndexChange((index + 1) % n)} disabled={loading}>
+          ›
+        </button>
+      </div>
+      <div className="carousel-caption">
+        <strong>{current.label}</strong>
+        <span>{loading ? "Loading…" : current.hint}</span>
+      </div>
+    </section>
   );
 }
 
@@ -357,16 +296,11 @@ function opLabel(op) {
     case "resize": return `Resize to ${p.width}×${p.height} (${p.method})`;
     case "grayscale": return "Grayscale";
     case "brightness": return `Brightness β = ${p.beta > 0 ? "+" : ""}${p.beta}`;
-    case "contrast": return `Contrast α = ${fmt(p.alpha)}`;
+    case "contrast": return `Contrast stretch [${fmt(p.low, 0)}, ${fmt(p.high, 0)}]`;
     case "gaussian_blur": return `Gaussian blur σ = ${fmt(p.sigma, 1)}`;
     case "median": return `Median filter ${p.size}×${p.size}`;
-    case "arithmetic_mean": return `Mean filter ${p.size}×${p.size}`;
-    case "geometric_mean": return `Geometric mean ${p.size}×${p.size}`;
-    case "harmonic_mean": return `Harmonic mean ${p.size}×${p.size}`;
-    case "salt_pepper_noise": return `Salt & pepper Pₚ = ${fmt(p.p_pepper, 2)}, Pₛ = ${fmt(p.p_salt, 2)}`;
-    case "quantization_noise": return `Quantization noise B = ${p.bits} (${2 ** p.bits} levels)`;
-    case "rayleigh_noise": return `Rayleigh noise a = ${p.a}, b = ${p.b}${p.zero_mean ? ", zero-mean" : ""}`;
-    case "uniform_noise": return `Uniform noise [${p.a}, ${p.b}]`;
+    case "salt_pepper": return `Salt & pepper P_a = ${fmt(p.pepper)}, P_b = ${fmt(p.salt)}`;
+    case "quantization": return `Quantization ${p.bits}-bit`;
     default: return op.type;
   }
 }
@@ -425,60 +359,52 @@ function ToolControls({ tool, params, setParams, img }) {
       </>
     );
   }
-  if (!t.sliders) return null;
-
-  // keep invalid values out of the UI so the user never hits a 422:
-  // Pp + Ps <= 1, a < b for uniform noise, b >= 1 for Rayleigh
-  const setParam = (key, value) => {
-    const p = { ...params, [key]: value };
-    if (tool === "salt_pepper_noise") {
-      const other = key === "p_pepper" ? "p_salt" : "p_pepper";
-      p[key] = Math.min(value, 1 - params[other]);
-    }
-    if (tool === "uniform_noise") {
-      if (key === "a") p.a = Math.min(value, params.b - 1);
-      if (key === "b") p.b = Math.max(value, params.a + 1);
-    }
-    setParams(p);
-  };
-
-  const formatSlider = (s, value) =>
-    s.key === "size" ? `${value} × ${value}` : s.step < 1 ? fmt(value, s.step < 0.1 ? 2 : 1) : value;
-
+  if (tool === "salt_pepper") {
+    const setPepper = (v) => setParams({ ...params, pepper: Math.min(v, 1 - params.salt) });
+    const setSalt = (v) => setParams({ ...params, salt: Math.min(v, 1 - params.pepper) });
+    return (
+      <div className="contrast-sliders">
+        <label className="slider">
+          <span>Pepper P_a (black)<output>{fmt(params.pepper)}</output></span>
+          <input type="range" min={0} max={0.25} step={0.01} value={params.pepper}
+            onChange={(e) => setPepper(Number(e.target.value))} />
+        </label>
+        <label className="slider">
+          <span>Salt P_b (white)<output>{fmt(params.salt)}</output></span>
+          <input type="range" min={0} max={0.25} step={0.01} value={params.salt}
+            onChange={(e) => setSalt(Number(e.target.value))} />
+        </label>
+      </div>
+    );
+  }
+  if (tool === "contrast") {
+    const setLow = (v) => setParams({ ...params, low: Math.min(v, params.high - 1) });
+    const setHigh = (v) => setParams({ ...params, high: Math.max(v, params.low + 1) });
+    return (
+      <div className="contrast-sliders">
+        <label className="slider">
+          <span>Low r₁ (darks)<output>{params.low}</output></span>
+          <input type="range" min={-100} max={254} step={1} value={params.low}
+            onChange={(e) => setLow(Number(e.target.value))} />
+        </label>
+        <label className="slider">
+          <span>High r₂ (brights)<output>{params.high}</output></span>
+          <input type="range" min={1} max={355} step={1} value={params.high}
+            onChange={(e) => setHigh(Number(e.target.value))} />
+        </label>
+      </div>
+    );
+  }
+  if (!t.slider) return null;
+  const s = t.slider;
+  const value = params[s.key];
+  const shown = tool === "median" ? `${value} × ${value}` : s.step < 1 ? fmt(value, s.step < 0.1 ? 2 : 1) : value;
   return (
-    <>
-      {t.sliders.map((s) => {
-        // with zero_mean on, the mean a + √(πb/4) is subtracted, so a has
-        // no effect at all — disable the slider and say why
-        const disabled = tool === "rayleigh_noise" && s.key === "a" && params.zero_mean;
-        return (
-          <label className="slider" key={s.key}>
-            <span>{s.name}<output>{formatSlider(s, params[s.key])}</output></span>
-            <input type="range" min={s.min} max={s.max} step={s.step} value={params[s.key]}
-              disabled={disabled}
-              onChange={(e) => setParam(s.key, Number(e.target.value))} />
-          </label>
-        );
-      })}
-      {tool === "rayleigh_noise" && (
-        <>
-          <label className="check">
-            <input type="checkbox" checked={params.zero_mean}
-              onChange={(e) => setParams({ ...params, zero_mean: e.target.checked })} />
-            Subtract the mean (no brightening)
-          </label>
-          {params.zero_mean && <p className="hint">Zero-mean mode: a has no effect.</p>}
-        </>
-      )}
-      {NOISE_TOOLS.has(tool) && (
-        <div className="row">
-          <button onClick={() => setParams({ ...params, seed: newSeed() })}>New noise pattern</button>
-        </div>
-      )}
-      {tool === "salt_pepper_noise" && (
-        <p className="hint">Total corrupted pixels: {fmt((params.p_pepper + params.p_salt) * 100, 1)}%.</p>
-      )}
-    </>
+    <label className="slider">
+      <span>{s.name}<output>{shown}</output></span>
+      <input type="range" min={s.min} max={s.max} step={s.step} value={value}
+        onChange={(e) => setParams({ [s.key]: Number(e.target.value) })} />
+    </label>
   );
 }
 
@@ -487,7 +413,8 @@ export default function App() {
   const [original, setOriginal] = useState(null);
   const [committed, setCommitted] = useState(null);
   const [ops, setOps] = useState([]);
-  const [redo, setRedo] = useState([]);
+  const [past, setPast] = useState([]);
+  const [future, setFuture] = useState([]);
   const [tool, setTool] = useState("brightness");
   const [params, setParams] = useState(defaultParams("brightness"));
   const [preview, setPreview] = useState(null);
@@ -503,57 +430,62 @@ export default function App() {
   const [fileName, setFileName] = useState("image");
   const [exportFormat, setExportFormat] = useState("png");
   const [exported, setExported] = useState("");
+  const [toolsOpen, setToolsOpen] = useState(true);
+  const [sampleIndex, setSampleIndex] = useState(0);
+  const [selectedSampleId, setSelectedSampleId] = useState("");
+  const [sampleLoading, setSampleLoading] = useState(false);
   const fileRef = useRef(null);
   const timer = useRef(0);
-  const previewReq = useRef(0);
+  const historyTimer = useRef(0);
+  const pendingSnap = useRef(null);
+  const skipParamReset = useRef(false);
 
-  useEffect(() => onRequest((e) => setLog((l) => [e, ...l].slice(0, 100))), []);
+  useEffect(() => onRequest((e) => setLog((l) => [e, ...l].slice(0, 40))), []);
   useEffect(() => onStatus(setBackend), []);
   useEffect(() => { checkBackend(); }, []);
 
-  // new result (apply, undo, redo, reset, new image): reset the tool's controls
+  // new result (undo, redo, reset, new image): reset the tool's controls
   useEffect(() => {
+    if (skipParamReset.current) {
+      skipParamReset.current = false;
+      return;
+    }
     if (committed) setParams(defaultParams(tool, committed));
     setDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [committed]);
 
+  function snapshot() {
+    return { tool, params, ops: ops.slice(), dirty };
+  }
+
+  function remember(before) {
+    setPast((h) => [...h, before].slice(-40));
+    setFuture([]);
+  }
+
   function editParams(p) {
+    if (!pendingSnap.current) pendingSnap.current = snapshot();
     setParams(p);
     setDirty(true);
+    clearTimeout(historyTimer.current);
+    historyTimer.current = setTimeout(() => {
+      const before = pendingSnap.current;
+      pendingSnap.current = null;
+      if (before) remember(before);
+    }, 350);
   }
 
   const pivot = useMemo(() => (committed ? stats(committed).mean : 128), [committed]);
   const neutral = isNeutral(tool, params, committed);
 
-  // live preview of the tool being adjusted
+  // live preview of the tool being adjusted (local only, not sent to the backend)
   useEffect(() => {
     if (!committed) return;
     clearTimeout(timer.current);
-    if (tool === "crop" || tool === "grayscale" || neutral || !dirty) {
+    if (tool === "crop" || neutral || !dirty) {
       setPreview(null); setComputing(false); return;
     }
-    // backend-only tools are not in imageOps.js: their preview is computed
-    // by the backend with the applied steps plus the step being edited.
-    // The slider fires many requests, so debounce; replies can arrive out
-    // of order, so only the latest request may update the state.
-    if (BACKEND_ONLY.has(tool)) {
-      if (backend !== "server") { setPreview(null); setComputing(false); return; }
-      const id = ++previewReq.current;
-      setComputing(true);
-      timer.current = setTimeout(async () => {
-        try {
-          const out = await processImage(imageId, [...ops, { type: tool, params: opParams(tool, params) }]);
-          if (id === previewReq.current) setPreview(out);
-        } catch (e) {
-          if (id === previewReq.current) { setPreview(null); setError(e.message); }
-        } finally {
-          if (id === previewReq.current) setComputing(false);
-        }
-      }, 300);
-      return () => clearTimeout(timer.current);
-    }
-    // local preview with applyOp (same result as the backend for these ops)
     const run = () => {
       try {
         setPreview(applyOp(committed, { type: tool, params: opParams(tool, params) }));
@@ -569,44 +501,71 @@ export default function App() {
       timer.current = setTimeout(run, 0);
     }
     return () => clearTimeout(timer.current);
-  }, [committed, tool, params, neutral, dirty, backend, imageId, ops]);
+  }, [committed, tool, params, neutral, dirty]);
 
-  function start(id, img, note = "", name = "image") {
+  function start(id, img, note = "", name = "image", sampleId = "") {
     setImageId(id);
     setFileName(name.replace(/\.[^.]+$/, "") || "image");
     setExported("");
     setOriginal(img);
     setCommitted(img);
     setOps([]);
-    setRedo([]);
+    setPast([]);
+    setFuture([]);
+    pendingSnap.current = null;
     setError("");
     setNotice(note);
+    setSelectedSampleId(sampleId);
   }
 
   async function handleFile(file) {
     if (!file) return;
     try {
       const { imageId: id, image, scaled } = await upload(file);
-      start(id, image, scaled ? "Large image: reduced to 1600 px on the longest side." : "", file.name);
+      start(id, image, scaled ? "Large image: reduced to 1600 px on the longest side." : "", file.name, "");
     } catch (e) {
       setError(e.message);
     }
   }
 
-  async function loadSample() {
+  async function loadBuiltin(sample) {
+    setSampleLoading(true);
+    setError("");
     try {
-      const { imageId: id, image } = await uploadSample(sampleImage());
-      start(id, image, "", "sample");
+      const { imageId: id, image, scaled } = await uploadFromUrl(sample.url, sample.file);
+      start(
+        id,
+        image,
+        scaled ? "Large image: reduced to 1600 px on the longest side." : "",
+        sample.file,
+        sample.id,
+      );
     } catch (e) {
       setError(e.message);
+    } finally {
+      setSampleLoading(false);
     }
   }
 
-  function selectTool(t) {
-    setTool(t);
-    setParams(defaultParams(t, committed));
-    // these tools have no "do nothing" value, so show their default effect right away
-    setDirty(PREVIEW_ON_OPEN.has(t));
+  async function selectTool(next) {
+    if (next === tool) return;
+    clearTimeout(historyTimer.current);
+    remember(pendingSnap.current || snapshot());
+    pendingSnap.current = null;
+    let base = committed;
+    if (dirty && !isNeutral(tool, params, committed)) {
+      skipParamReset.current = true;
+      const op = { type: tool, params: opParams(tool, params) };
+      const out = await commit([...ops, op]);
+      if (!out) {
+        skipParamReset.current = false;
+        return;
+      }
+      base = out;
+    }
+    setTool(next);
+    setParams(defaultParams(next, base));
+    setDirty(next === "gaussian_blur" || next === "median" || next === "grayscale" || next === "salt_pepper" || next === "quantization");
   }
 
   // Returns true when the backend accepted the new operation list.
@@ -618,7 +577,7 @@ export default function App() {
       setCommitted(out);
       setError("");
       setExported("");
-      return true;
+      return out;
     } catch (e) {
       setError(e.message);
       return false;
@@ -627,35 +586,54 @@ export default function App() {
     }
   }
 
-  async function apply() {
-    if (neutral) return;
-    const op = { type: tool, params: opParams(tool, params) };
-    if (await commit([...ops, op])) setRedo([]);
+  async function applySnapshot(s) {
+    setTool(s.tool);
+    setParams(s.params);
+    setDirty(s.dirty);
+    if (JSON.stringify(s.ops) !== JSON.stringify(ops)) {
+      skipParamReset.current = true;
+      await commit(s.ops);
+    }
   }
 
-  async function undo() {
-    if (!ops.length) return;
-    const last = ops[ops.length - 1];
-    if (await commit(ops.slice(0, -1))) setRedo((r) => [last, ...r]);
+  function undo() {
+    if (!past.length || busy) return;
+    const prev = past[past.length - 1];
+    setFuture((f) => [snapshot(), ...f]);
+    setPast((h) => h.slice(0, -1));
+    applySnapshot(prev);
   }
 
-  async function redoOp() {
-    if (!redo.length) return;
-    const [first, ...rest] = redo;
-    if (await commit([...ops, first])) setRedo(rest);
+  function redoOp() {
+    if (!future.length || busy) return;
+    const next = future[0];
+    setPast((h) => [...h, snapshot()]);
+    setFuture((f) => f.slice(1));
+    applySnapshot(next);
   }
 
   function reset() {
-    setRedo([]);
+    clearTimeout(historyTimer.current);
+    pendingSnap.current = null;
+    setPast([]);
+    setFuture([]);
     setOps([]);
-    setCommitted(original);
+    setParams(defaultParams(tool, original));
+    setDirty(false);
+    if (committed !== original) {
+      skipParamReset.current = true;
+      setCommitted(original);
+    }
   }
 
   async function handleExport() {
     setBusy(true);
     setExported("");
+    const live = dirty && !isNeutral(tool, params, committed)
+      ? [{ type: tool, params: opParams(tool, params) }]
+      : [];
     try {
-      const blob = await exportImage(imageId, ops, exportFormat);
+      const blob = await exportImage(imageId, [...ops, ...live], exportFormat);
       const name = `${fileName}_processed.${EXPORT_FORMATS[exportFormat].ext}`;
       saveBlob(blob, name);
       setExported(`Downloaded ${name}`);
@@ -670,31 +648,22 @@ export default function App() {
   const t = TOOLS[tool];
   const shown = preview || committed;
   const processedNote = computing
-    ? "Computing preview…"
-    : preview
-      ? `Preview ${preview.width}×${preview.height}, not applied`
-      : committed ? `${committed.width}×${committed.height} · ${ops.length} step${ops.length === 1 ? "" : "s"}` : "";
+    ? "Computing…"
+    : shown ? `${shown.width}×${shown.height}` : "";
 
   const exportFooter = committed && (
     <>
       <div className="export-row">
-        <label className="select">
-          <span>Format</span>
-          <select value={exportFormat} onChange={(e) => setExportFormat(e.target.value)}>
-            {Object.entries(EXPORT_FORMATS).map(([k, v]) => (
-              <option key={k} value={k} disabled={k === "tiff" && backend !== "server"}>
-                {v.label}{k === "tiff" && backend !== "server" ? " (needs backend)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button className="primary grow" onClick={handleExport} disabled={busy}>Download result</button>
+        <select aria-label="Format" value={exportFormat} onChange={(e) => setExportFormat(e.target.value)}>
+          {Object.entries(EXPORT_FORMATS).map(([k, v]) => (
+            <option key={k} value={k} disabled={k === "tiff" && backend !== "server"}>
+              {v.label}{k === "tiff" && backend !== "server" ? " (needs backend)" : ""}
+            </option>
+          ))}
+        </select>
+        <button className="primary" onClick={handleExport} disabled={busy}>Download</button>
       </div>
-      <p className="hint">
-        {preview || (tool === "crop" && !neutral)
-          ? "Downloads the applied steps only. Apply or cancel the current change first."
-          : exported || `Saves the result of ${ops.length} applied step${ops.length === 1 ? "" : "s"}.`}
-      </p>
+      {exported && <p className="hint">{exported}</p>}
     </>
   );
 
@@ -714,6 +683,14 @@ export default function App() {
         </span>
       </header>
 
+      <SampleCarousel
+        index={sampleIndex}
+        onIndexChange={setSampleIndex}
+        onSelect={loadBuiltin}
+        loading={sampleLoading}
+        selectedId={selectedSampleId}
+      />
+
       {!original ? (
         <main className="empty">
           <div
@@ -723,26 +700,36 @@ export default function App() {
             onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
           >
             <h2>Load an image to start</h2>
-            <p>Drop a JPEG, PNG or TIFF file here, or choose one from your computer.</p>
+            <p>Pick a sample above, drop a JPEG, PNG or TIFF here, or choose a file from your computer.</p>
             <div className="row">
               <button className="primary" onClick={() => fileRef.current.click()}>Choose image</button>
-              <button onClick={loadSample}>Use sample image</button>
             </div>
             {error && <p className="error" role="alert">{error}</p>}
           </div>
         </main>
       ) : (
-        <main className="work">
-          <aside className="tools panel">
-            <h3>Tools</h3>
+        <main className={"work" + (toolsOpen ? "" : " tools-closed")}>
+          <aside className={"tools panel" + (toolsOpen ? "" : " closed")}>
+            <div className="tools-head">
+              {toolsOpen && <h3>Tools</h3>}
+              <button
+                type="button"
+                className="tools-toggle"
+                aria-expanded={toolsOpen}
+                aria-label={toolsOpen ? "Hide tools" : "Show tools"}
+                onClick={() => setToolsOpen((open) => !open)}
+              >
+                {toolsOpen ? "‹" : "›"}
+              </button>
+              {!toolsOpen && <span className="tools-rail">Tools</span>}
+            </div>
+            {toolsOpen && (
+            <>
             <div className="tool-list" role="tablist" aria-label="Tools">
               {Object.entries(TOOLS).map(([k, v]) => (
                 <button key={k} role="tab" aria-selected={tool === k}
-                  disabled={v.backendOnly && backend !== "server"}
-                  title={v.backendOnly && backend !== "server" ? "Needs backend" : undefined}
                   className={"tool" + (tool === k ? " on" : "")} onClick={() => selectTool(k)}>
                   {v.label}
-                  {v.backendOnly && backend !== "server" && <span className="note"> (needs backend)</span>}
                 </button>
               ))}
             </div>
@@ -755,36 +742,39 @@ export default function App() {
 
             <ToolControls tool={tool} params={params} setParams={editParams} img={committed} />
 
-            <div className="row">
-              <button className="primary" onClick={apply} disabled={neutral || busy}>Apply {t.label.toLowerCase()}</button>
-              {tool !== "grayscale" && (
-                <button onClick={() => { setParams(defaultParams(tool, committed)); setDirty(false); }} disabled={busy}>Cancel</button>
-              )}
-            </div>
-
             <h3 className="gap">History</h3>
-            {ops.length === 0 ? (
-              <p className="hint">No operations yet. Applied steps appear here in order.</p>
+            {ops.length === 0 && (neutral || !dirty) ? (
+              <p className="hint">No operations yet. Each parameter change can be undone.</p>
             ) : (
-              <ol className="history">{ops.map((op, i) => <li key={i}>{opLabel(op)}</li>)}</ol>
+              <ol className="history">
+                {ops.map((op, i) => <li key={i}>{opLabel(op)}</li>)}
+                {dirty && !neutral && <li>{opLabel({ type: tool, params })}</li>}
+              </ol>
             )}
             <div className="row">
-              <button onClick={undo} disabled={!ops.length || busy}>Undo</button>
-              <button onClick={redoOp} disabled={!redo.length || busy}>Redo</button>
-              <button onClick={reset} disabled={!ops.length || busy}>Reset</button>
+              <button onClick={undo} disabled={!past.length || busy}>Undo</button>
+              <button onClick={redoOp} disabled={!future.length || busy}>Redo</button>
+              <button onClick={reset} disabled={(!past.length && !ops.length && (neutral || !dirty)) || busy}>Reset</button>
             </div>
 
-            <h3 className="gap">Image</h3>
-            <div className="row">
-              <button onClick={() => fileRef.current.click()}>Load another image</button>
-            </div>
             {error && <p className="error" role="alert">{error}</p>}
+            </>
+            )}
           </aside>
 
           <section className="canvases">
             {notice && <p className="notice">{notice}</p>}
             <div className="pair">
-              <ImageCanvas image={original} label="Original" note={`${original.width}×${original.height}`} />
+              <ImageCanvas
+                image={original}
+                label="Original"
+                note={`${original.width}×${original.height}`}
+                footer={(
+                  <div className="frame-foot-row">
+                    <button onClick={() => fileRef.current.click()}>Load another image</button>
+                  </div>
+                )}
+              />
               <ImageCanvas
                 image={shown}
                 label="Processed"
@@ -804,7 +794,7 @@ export default function App() {
               <h3>Requests to backend</h3>
               <p className="hint">
                 {backend === "server"
-                  ? "Live requests to the FastAPI backend. Previews stay local until you apply."
+                  ? "Live requests to the FastAPI backend. The picture updates as you move the controls."
                   : "Simulated requests: what the frontend will send once the backend is running."}
               </p>
               <ul>

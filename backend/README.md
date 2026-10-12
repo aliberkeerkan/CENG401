@@ -17,11 +17,16 @@ pip install -r requirements.txt
 
 ```bash
 .venv\Scripts\activate
-uvicorn app.main:app --reload
+python run.py
 ```
 
-- API: http://localhost:8000
+(Same as: `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`.)
+
+- API (this PC): http://localhost:8000
+- API (LAN): `http://192.168.x.x:8000`
 - Interactive docs: http://localhost:8000/docs
+
+`--host 0.0.0.0` is required so phones/PCs on the same network can call the API when they open the frontend via your LAN IP.
 
 ## Test
 
@@ -39,19 +44,8 @@ pytest
 | POST | `/process` | `{ image_id, operations: [{ type, params }] }` | `image/png` |
 | POST | `/export` | `{ image_id, operations, format: png \| jpeg \| tiff, quality }` | file download |
 
-| Group | Operation types and parameters |
-|-------|--------------------------------|
-| Basic | `crop` {x, y, width, height}, `resize` {width, height, method}, `grayscale`, `brightness` {beta}, `contrast` {alpha} |
-| Filters | `gaussian_blur` {sigma}, `median`, `arithmetic_mean`, `geometric_mean`, `harmonic_mean` {size: odd, 3–15} |
-| Noise | `salt_pepper_noise` {p_pepper, p_salt, seed}, `quantization_noise` {bits: 1–8}, `rayleigh_noise` {a, b, zero_mean, seed}, `uniform_noise` {a, b, seed} |
-
-Limits are listed in `app/schemas.py` and on the `/docs` page.
-
-Random noise uses `seed` (default 0). `/process` re-applies the whole list
-on every change, so keep the seed of a noise step fixed to keep the same
-noise pattern across previews, undo/redo and `/export`; send a new seed to
-draw a new pattern. With `rayleigh_noise`, `zero_mean: true` removes the
-mean, so `a` then has no effect.
+Operation types: `crop`, `resize`, `grayscale`, `brightness`, `contrast`, `gaussian_blur`, `median`.
+Parameters and limits are listed in `app/schemas.py` and on the `/docs` page.
 
 `/process` always applies the full operation list to the stored original,
 so undo/redo only changes the list on the client.
@@ -69,8 +63,7 @@ app/
       __init__.py    operation registry and pipeline
       basic.py       grayscale (6), brightness (8), contrast (9)
       geometry.py    crop (4), resize: nearest / bilinear (5)
-      filters.py     Gaussian blur (10), mean filters (27)-(29), median (33)
-      noise.py       salt-and-pepper (18), quantization (22), Rayleigh (24), uniform (25)
+      filters.py     Gaussian blur (10), median filter (33)
 tests/               unit and API tests
 ```
 
@@ -85,3 +78,4 @@ tests/               unit and API tests
 
 - `CORS_ORIGINS`: comma-separated list of allowed frontend origins.
   Default: `http://localhost:5173,http://127.0.0.1:5173`.
+  Private LAN origins (`http://192.168.x.x:5173`, `10.x`, `172.16–31.x`) are also allowed by regex so DHCP IP changes do not break the UI.

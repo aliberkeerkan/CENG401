@@ -76,7 +76,7 @@ def test_errors():
     assert upload(b"not an image", name="x.txt").status_code == 415
     assert client.post("/process", json={"image_id": "missing", "operations": []}).status_code == 404
     image_id = upload(png_bytes(np.zeros((2, 2, 3), dtype=np.uint8))).json()["image_id"]
-    bad = {"image_id": image_id, "operations": [{"type": "contrast", "params": {"alpha": -1}}]}
+    bad = {"image_id": image_id, "operations": [{"type": "contrast", "params": {"low": 200, "high": 50}}]}
     assert client.post("/process", json=bad).status_code == 422
     unknown = {"image_id": image_id, "operations": [{"type": "sepia", "params": {}}]}
     assert client.post("/process", json=unknown).status_code == 422
@@ -140,54 +140,3 @@ def test_crop_and_resize_transform_alpha_too():
            {"type": "resize", "params": {"width": 10, "height": 20, "method": "nearest"}}]
     out = decode(client.post("/process", json={"image_id": image_id, "operations": ops}))
     assert out.shape == (20, 10, 4) and np.all(out[..., 3] == 255)
-
-
-NOISE_AND_MEAN_OPS = [
-    {"type": "salt_pepper_noise", "params": {"p_pepper": 0.05, "p_salt": 0.05, "seed": 3}},
-    {"type": "quantization_noise", "params": {"bits": 3}},
-    {"type": "rayleigh_noise", "params": {"a": 0, "b": 200, "zero_mean": True, "seed": 4}},
-    {"type": "uniform_noise", "params": {"a": -10, "b": 10, "seed": 5}},
-    {"type": "arithmetic_mean", "params": {"size": 3}},
-    {"type": "geometric_mean", "params": {"size": 5}},
-    {"type": "harmonic_mean", "params": {"size": 3}},
-]
-
-
-def test_noise_and_mean_filters_through_api():
-    arr = np.random.default_rng(6).integers(0, 256, (30, 40, 3), dtype=np.uint8)
-    image_id = upload(png_bytes(arr)).json()["image_id"]
-    for op in NOISE_AND_MEAN_OPS:
-        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
-        assert r.status_code == 200, op["type"]
-        assert decode(r).shape == (30, 40, 3)
-
-
-def test_noise_is_the_same_in_process_and_export():
-    arr = np.full((20, 20, 3), 128, dtype=np.uint8)
-    image_id = upload(png_bytes(arr)).json()["image_id"]
-    body = {"image_id": image_id, "operations": NOISE_AND_MEAN_OPS[:4]}
-    a = decode(client.post("/process", json=body))
-    b = decode(client.post("/process", json=body))
-    c = decode(client.post("/export", json={**body, "format": "png"}))
-    assert np.array_equal(a, b) and np.array_equal(a, c)
-    # no seed given: default seed, still deterministic
-    op = [{"type": "uniform_noise", "params": {"a": -10, "b": 10}}]
-    body = {"image_id": image_id, "operations": op}
-    assert np.array_equal(decode(client.post("/process", json=body)),
-                          decode(client.post("/process", json=body)))
-
-
-def test_noise_and_mean_parameters_are_validated():
-    image_id = upload(png_bytes(np.zeros((8, 8, 3), dtype=np.uint8))).json()["image_id"]
-    bad = [
-        {"type": "salt_pepper_noise", "params": {"p_pepper": 0.6, "p_salt": 0.6}},  # Pp + Ps > 1
-        {"type": "quantization_noise", "params": {"bits": 0}},
-        {"type": "rayleigh_noise", "params": {"a": 0, "b": 0}},  # b_R > 0
-        {"type": "rayleigh_noise", "params": {"a": 0, "b": -4}},
-        {"type": "uniform_noise", "params": {"a": 10, "b": 10}},  # a_U < b_U
-        {"type": "geometric_mean", "params": {"size": 4}},  # even window
-        {"type": "harmonic_mean", "params": {"size": 17}},
-    ]
-    for op in bad:
-        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
-        assert r.status_code == 422, op

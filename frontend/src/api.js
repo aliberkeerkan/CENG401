@@ -13,7 +13,19 @@
 
 import { applyPipeline } from "./imageOps.js";
 
-export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// Prefer VITE_API_URL when set. Otherwise use the same host the page was
+// opened with (localhost, 127.0.0.1, or a LAN IP) so phone/PC on the same
+// network can reach the backend without editing .env after every IP change.
+function resolveApiUrl() {
+  const fromEnv = import.meta.env.VITE_API_URL;
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  if (typeof window !== "undefined" && window.location?.hostname) {
+    return `http://${window.location.hostname}:8000`;
+  }
+  return "http://localhost:8000";
+}
+
+export const API_URL = resolveApiUrl();
 const MAX_SIDE = 1600;
 
 let mode = "checking"; // "checking" | "server" | "mock"
@@ -84,10 +96,7 @@ async function errorMessage(r) {
   try {
     const body = await r.json();
     if (typeof body.detail === "string") return body.detail;
-    // Pydantic prefixes its messages with "Value error, " — drop the prefix
-    if (Array.isArray(body.detail)) {
-      return body.detail.map((d) => d.msg.replace(/^Value error,\s*/i, "")).join("; ");
-    }
+    if (Array.isArray(body.detail)) return body.detail.map((d) => d.msg).join("; ");
   } catch { /* not JSON */ }
   return `Request failed with status ${r.status}.`;
 }
@@ -222,6 +231,23 @@ async function mockProcess(imageId, operations) {
 
 export function upload(file) {
   return mode === "server" ? serverUpload(file, file.name) : mockUpload(file, file.name);
+}
+
+/** Load a bundled sample from `public/` (same upload path as user files). */
+export async function uploadFromUrl(url, filename) {
+  let res;
+  try {
+    res = await fetch(url);
+  } catch {
+    throw new Error("Could not reach the sample image.");
+  }
+  if (!res.ok) throw new Error(`Sample "${filename}" is missing (${res.status}).`);
+  const blob = await res.blob();
+  const lower = filename.toLowerCase();
+  const type = blob.type
+    || (lower.endsWith(".png") ? "image/png" : lower.endsWith(".tif") || lower.endsWith(".tiff") ? "image/tiff" : "image/jpeg");
+  const file = new File([blob], filename, { type });
+  return upload(file);
 }
 
 export async function uploadSample(image) {
