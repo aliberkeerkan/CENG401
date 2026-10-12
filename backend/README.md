@@ -41,7 +41,7 @@ pytest
 
 | Group | Operation types and parameters |
 |-------|--------------------------------|
-| Basic | `crop` {x, y, width, height}, `resize` {width, height, method}, `grayscale`, `brightness` {beta}, `contrast` {alpha} |
+| Basic | `crop` {x, y, width, height}, `resize` {width, height, method}, `grayscale`, `brightness` {beta}, `contrast` {alpha, c (optional pivot; default: image mean luma)} |
 | Filters | `gaussian_blur` {sigma}, `median`, `arithmetic_mean`, `geometric_mean`, `harmonic_mean` {size: odd, 3–15} |
 | Noise | `salt_pepper_noise` {p_pepper, p_salt, seed}, `quantization_noise` {bits: 1–8}, `rayleigh_noise` {a, b, zero_mean, seed}, `uniform_noise` {a, b, seed} |
 

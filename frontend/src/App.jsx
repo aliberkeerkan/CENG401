@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import {
-  upload, uploadSample, processImage, exportImage, saveBlob, EXPORT_FORMATS,
+  upload, uploadSample, uploadFromUrl, processImage, exportImage, saveBlob, EXPORT_FORMATS,
   onRequest, onStatus, checkBackend, API_URL,
 } from "./api.js";
+import { BUILTIN_SAMPLES } from "./builtinSamples.js";
 import { applyOp, stats, sampleImage, gaussianKernel } from "./imageOps.js";
 
 // Tool definitions. `heavy` tools get a short delay before the preview is
@@ -29,8 +32,11 @@ const TOOLS = {
   },
   contrast: {
     label: "Contrast", eq: "9",
-    sliders: [{ key: "alpha", min: 0.2, max: 3, step: 0.05, name: "α (gain)" }],
-    describe: "Stretches intensities around the image mean c. α > 1 increases contrast.",
+    sliders: [
+      { key: "alpha", min: 0.2, max: 3, step: 0.05, name: "α (gain)" },
+      { key: "c", min: 0, max: 255, step: 1, name: "c (pivot)" },
+    ],
+    describe: "Stretches intensities around the pivot c, which starts at the image mean. α > 1 increases contrast; the level c stays fixed.",
   },
   gaussian_blur: {
     label: "Gaussian blur", eq: "10", heavy: true,
@@ -113,7 +119,8 @@ function defaultParams(tool, img) {
       return { x: Math.round(w * 0.1), y: Math.round(h * 0.1), width: Math.max(1, Math.round(w * 0.8)), height: Math.max(1, Math.round(h * 0.8)) };
     case "resize": return { width: w, height: h, method: "bilinear", lock: true };
     case "brightness": return { beta: 0 };
-    case "contrast": return { alpha: 1 };
+    // the pivot starts at the image mean, the plan's example for Eq. (9)
+    case "contrast": return { alpha: 1, c: img ? Math.round(stats(img).mean) : 128 };
     case "gaussian_blur": return { sigma: 1.5 };
     case "median": return { size: 3 };
     case "arithmetic_mean":
@@ -149,115 +156,125 @@ function opParams(tool, p) {
 const fmt = (v, d = 2) => Number(v).toFixed(d);
 const clampInt = (v, lo, hi) => Math.min(Math.max(Math.round(Number(v) || 0), lo), hi);
 
-function Formula({ tool, params, pivot, img }) {
+function MathTex({ tex, display = false }) {
+  const html = useMemo(
+    () => katex.renderToString(tex, { throwOnError: false, displayMode: display, strict: "ignore" }),
+    [tex, display],
+  );
+  return <span className="math" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+// The plan's equation for each tool, with the current parameter values.
+function formulaTex(tool, params, img) {
   const W = img ? img.width : 0, H = img ? img.height : 0;
+  const win = `${params.size}\\times${params.size}`;
   switch (tool) {
     case "crop":
-      return (
-        <span className="math">
-          <i>g</i>(<i>x</i>,<i>y</i>) = <i>f</i>(<i>x</i> + <b>{params.x}</b>, <i>y</i> + <b>{params.y}</b>),
-          0 ≤ <i>x</i> &lt; <b>{params.width}</b>, 0 ≤ <i>y</i> &lt; <b>{params.height}</b>
-        </span>
-      );
+      return `g(x,y)=f(x+${params.x},\\,y+${params.y}),\\quad 0\\le x<${params.width},\\; 0\\le y<${params.height}`;
     case "resize":
-      return params.method === "nearest" ? (
-        <span className="math">
-          <i>g</i>(<i>x</i>′,<i>y</i>′) = <i>f</i>(round(<i>x</i>), round(<i>y</i>)),
-          <i> x</i> = (<i>x</i>′ + ½)·<b>{W}</b>/<b>{params.width}</b> − ½
-        </span>
-      ) : (
-        <span className="math">
-          bilinear from <i>f</i> at <i>x</i> = (<i>x</i>′ + ½)·<b>{W}</b>/<b>{params.width}</b> − ½,
-          <i> y</i> = (<i>y</i>′ + ½)·<b>{H}</b>/<b>{params.height}</b> − ½
-        </span>
-      );
+      return params.method === "nearest"
+        ? `\\begin{aligned} g(x',y')&=f(\\mathrm{round}(x),\\mathrm{round}(y))\\\\ x&=(x'+\\tfrac12)\\cdot\\frac{${W}}{${params.width}}-\\tfrac12 \\end{aligned}`
+        : `\\begin{aligned} x&=(x'+\\tfrac12)\\cdot\\frac{${W}}{${params.width}}-\\tfrac12\\\\ y&=(y'+\\tfrac12)\\cdot\\frac{${H}}{${params.height}}-\\tfrac12 \\end{aligned}`;
     case "grayscale":
-      return <span className="math"><i>Y</i> = 0.299<i>R</i> + 0.587<i>G</i> + 0.114<i>B</i></span>;
-    case "brightness":
-      return (
-        <span className="math">
-          <i>g</i>(<i>x</i>,<i>y</i>) = clip(<i>f</i>(<i>x</i>,<i>y</i>) {params.beta < 0 ? "−" : "+"} <b>{Math.abs(params.beta)}</b>)
-        </span>
-      );
+      return `Y=0.299R+0.587G+0.114B`;
+    case "brightness": {
+      const sign = params.beta < 0 ? "-" : "+";
+      return `g(x,y)=\\mathrm{clip}\\bigl(f(x,y)${sign}${Math.abs(params.beta)}\\bigr)`;
+    }
     case "contrast":
-      return (
-        <span className="math">
-          <i>g</i> = clip(<b>{fmt(params.alpha)}</b>(<i>f</i> − <b>{fmt(pivot, 1)}</b>) + <b>{fmt(pivot, 1)}</b>)
-        </span>
-      );
+      return `\\begin{aligned} g&=\\mathrm{clip}\\bigl(\\alpha\\,(f-c)+c\\bigr)\\\\ \\alpha&=${fmt(params.alpha)},\\; c=${params.c} \\end{aligned}`;
     case "gaussian_blur": {
       const n = gaussianKernel(params.sigma).length;
-      return (
-        <span className="math">
-          <i>w</i>(<i>s</i>,<i>t</i>) ∝ exp(−(<i>s</i>² + <i>t</i>²) / 2<i>σ</i>²), <i>σ</i> = <b>{fmt(params.sigma, 1)}</b>,
-          window <b>{n}×{n}</b>
-        </span>
-      );
+      return `\\begin{aligned} w(s,t)&\\propto\\exp\\!\\left(-\\frac{s^{2}+t^{2}}{2\\sigma^{2}}\\right)\\\\ \\sigma&=${fmt(params.sigma, 1)},\\;\\text{window }${n}\\times${n} \\end{aligned}`;
     }
     case "median":
-      return (
-        <span className="math">
-          <i>f̂</i>(<i>x</i>,<i>y</i>) = median{"{"}<i>g</i>(<i>s</i>,<i>t</i>){"}"}, <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
-        </span>
-      );
+      return `\\hat{f}(x,y)=\\mathrm{median}\\{g(s,t)\\},\\; S_{xy}=${win}`;
     case "arithmetic_mean":
-      return (
-        <span className="math">
-          <i>f̂</i>(<i>x</i>,<i>y</i>) = (1/<i>mn</i>) Σ <i>g</i>(<i>s</i>,<i>t</i>), <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
-        </span>
-      );
+      return `\\begin{aligned} \\hat{f}(x,y)&=\\frac{1}{mn}\\sum_{(s,t)\\in S_{xy}} g(s,t)\\\\ S_{xy}&=${win} \\end{aligned}`;
     case "geometric_mean":
-      return (
-        <span className="math">
-          <i>f̂</i>(<i>x</i>,<i>y</i>) = exp((1/<i>mn</i>) Σ ln(<i>g</i>(<i>s</i>,<i>t</i>) + ε)), <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
-        </span>
-      );
+      return `\\begin{aligned} \\hat{f}(x,y)&=\\exp\\!\\Bigl(\\frac{1}{mn}\\sum_{(s,t)\\in S_{xy}}\\ln\\bigl(g(s,t)+\\varepsilon\\bigr)\\Bigr)\\\\ S_{xy}&=${win} \\end{aligned}`;
     case "harmonic_mean":
-      return (
-        <span className="math">
-          <i>f̂</i>(<i>x</i>,<i>y</i>) = <i>mn</i> / Σ 1/(<i>g</i>(<i>s</i>,<i>t</i>) + ε), <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
-        </span>
-      );
+      return `\\begin{aligned} \\hat{f}(x,y)&=\\frac{mn}{\\sum_{(s,t)\\in S_{xy}} 1/\\bigl(g(s,t)+\\varepsilon\\bigr)}\\\\ S_{xy}&=${win} \\end{aligned}`;
     case "salt_pepper_noise":
-      return (
-        <span className="math">
-          <i>g</i> = 0 with prob. <i>P<sub>p</sub></i> = <b>{fmt(params.p_pepper, 2)}</b>,
-          <i> L</i>−1 with prob. <i>P<sub>s</sub></i> = <b>{fmt(params.p_salt, 2)}</b>, <i>f</i> otherwise
-        </span>
-      );
+      return `\\begin{aligned} p(z)&=\\begin{cases} P_p=${fmt(params.p_pepper)} & z=0 \\\\ P_s=${fmt(params.p_salt)} & z=255 \\\\ 1-P_p-P_s & \\text{else}\\end{cases}\\\\ g&=\\begin{cases} 0 & u<P_p \\\\ 255 & P_p\\le u<P_p+P_s \\\\ f & \\text{else}\\end{cases}\\end{aligned}`;
     case "quantization_noise": {
       const delta = 255 / (2 ** params.bits - 1);
-      return (
-        <span className="math">
-          <i>q</i>(<i>f</i>) = Δ·round(<i>f</i>/Δ), Δ = 255/(2<sup><b>{params.bits}</b></sup> − 1) ≈ <b>{fmt(delta, 2)}</b>
-        </span>
-      );
+      return `\\begin{aligned} \\Delta&=\\dfrac{255}{2^{${params.bits}}-1}=${fmt(delta, 2)}\\\\ q(f)&=\\Delta\\cdot\\mathrm{round}(f/\\Delta)\\\\ \\sigma_e^{2}&\\approx\\Delta^{2}/12 \\end{aligned}`;
     }
     case "rayleigh_noise": {
       // plan 5.3.6: the positive noise mean brightens the image, the UI
       // must say so — show the live mean and standard deviation
-      const mean = params.a + Math.sqrt((Math.PI * params.b) / 4);
+      const mean = params.zero_mean ? 0 : params.a + Math.sqrt((Math.PI * params.b) / 4);
       const std = Math.sqrt((params.b * (4 - Math.PI)) / 4);
-      return (
-        <span className="math">
-          <i>p</i>(<i>z</i>) = (2/<i>b</i>)(<i>z</i>−<i>a</i>) e<sup>−(<i>z</i>−<i>a</i>)²/<i>b</i></sup>, <i>g</i> = clip(<i>f</i> + <i>z</i>);
-          noise mean <b>{fmt(params.zero_mean ? 0 : mean, 1)}</b>, std <b>{fmt(std, 1)}</b>
-          {params.zero_mean ? " (mean subtracted)" : ""}
-        </span>
-      );
+      const note = params.zero_mean ? "\\;\\text{(mean subtracted)}" : "";
+      return `\\begin{aligned} p(z)&=\\frac{2}{b}(z-a)\\,e^{-(z-a)^{2}/b},\\; z\\ge a\\\\ g&=\\mathrm{clip}(f+z)\\\\ \\text{mean}&=${fmt(mean, 1)},\\;\\text{std}=${fmt(std, 1)}${note} \\end{aligned}`;
     }
     case "uniform_noise": {
       const std = (params.b - params.a) / Math.sqrt(12);
-      return (
-        <span className="math">
-          <i>p</i>(<i>z</i>) = 1/(<i>b</i>−<i>a</i>) on [<b>{params.a}</b>, <b>{params.b}</b>], <i>g</i> = clip(<i>f</i> + <i>z</i>);
-          noise mean <b>{fmt((params.a + params.b) / 2, 1)}</b>, std <b>{fmt(std, 1)}</b>
-        </span>
-      );
+      return `\\begin{aligned} p(z)&=\\frac{1}{b-a},\\; ${params.a}\\le z\\le ${params.b}\\\\ g&=\\mathrm{clip}(f+z)\\\\ \\text{mean}&=${fmt((params.a + params.b) / 2, 1)},\\;\\text{std}=${fmt(std, 1)} \\end{aligned}`;
     }
     default:
       return null;
   }
+}
+
+function Formula({ tool, params, img }) {
+  const tex = formulaTex(tool, params, img);
+  if (!tex) return null;
+  return <MathTex tex={tex} display={tex.startsWith("\\begin")} />;
+}
+
+function SampleCarousel({ index, onIndexChange, onSelect, loading, selectedId }) {
+  const n = BUILTIN_SAMPLES.length;
+  const slots = [-2, -1, 0, 1, 2].map((offset) => {
+    const i = (index + offset + n) % n;
+    return { offset, i, sample: BUILTIN_SAMPLES[i] };
+  });
+  const current = BUILTIN_SAMPLES[index];
+
+  return (
+    <section className="sample-carousel" aria-label="Built-in sample images">
+      <div className="sample-carousel-head">
+        <h3>Sample images</h3>
+        <p className="hint">Click a square to bring it forward. Click the large photo to load it.</p>
+      </div>
+      <div className="carousel">
+        <button type="button" className="carousel-nav" aria-label="Previous sample"
+          onClick={() => onIndexChange((index - 1 + n) % n)} disabled={loading}>
+          ‹
+        </button>
+        <div className="carousel-stage">
+          {slots.map(({ offset, i, sample }) => {
+            const center = offset === 0;
+            return (
+              <button
+                key={sample.id}
+                type="button"
+                className={
+                  "carousel-card" +
+                  (center ? " center" : offset === -1 || offset === 1 ? " near" : " far") +
+                  (selectedId === sample.id ? " loaded" : "")
+                }
+                aria-label={center ? `Load ${sample.label}` : `Show ${sample.label}`}
+                onClick={() => (center ? onSelect(sample) : onIndexChange(i))}
+                disabled={loading}
+              >
+                <img src={sample.url} alt={center ? sample.label : ""} draggable={false} />
+              </button>
+            );
+          })}
+        </div>
+        <button type="button" className="carousel-nav" aria-label="Next sample"
+          onClick={() => onIndexChange((index + 1) % n)} disabled={loading}>
+          ›
+        </button>
+      </div>
+      <div className="carousel-caption">
+        <strong>{current.label}</strong>
+        <span>{loading ? "Loading…" : current.hint}</span>
+      </div>
+    </section>
+  );
 }
 
 function CropOverlay({ img, rect, onChange }) {
@@ -357,7 +374,7 @@ function opLabel(op) {
     case "resize": return `Resize to ${p.width}×${p.height} (${p.method})`;
     case "grayscale": return "Grayscale";
     case "brightness": return `Brightness β = ${p.beta > 0 ? "+" : ""}${p.beta}`;
-    case "contrast": return `Contrast α = ${fmt(p.alpha)}`;
+    case "contrast": return `Contrast α = ${fmt(p.alpha)}, c = ${p.c}`;
     case "gaussian_blur": return `Gaussian blur σ = ${fmt(p.sigma, 1)}`;
     case "median": return `Median filter ${p.size}×${p.size}`;
     case "arithmetic_mean": return `Mean filter ${p.size}×${p.size}`;
@@ -503,6 +520,9 @@ export default function App() {
   const [fileName, setFileName] = useState("image");
   const [exportFormat, setExportFormat] = useState("png");
   const [exported, setExported] = useState("");
+  const [sampleIndex, setSampleIndex] = useState(0);
+  const [selectedSampleId, setSelectedSampleId] = useState("");
+  const [sampleLoading, setSampleLoading] = useState(false);
   const fileRef = useRef(null);
   const timer = useRef(0);
   const previewReq = useRef(0);
@@ -523,7 +543,6 @@ export default function App() {
     setDirty(true);
   }
 
-  const pivot = useMemo(() => (committed ? stats(committed).mean : 128), [committed]);
   const neutral = isNeutral(tool, params, committed);
 
   // live preview of the tool being adjusted
@@ -571,7 +590,7 @@ export default function App() {
     return () => clearTimeout(timer.current);
   }, [committed, tool, params, neutral, dirty, backend, imageId, ops]);
 
-  function start(id, img, note = "", name = "image") {
+  function start(id, img, note = "", name = "image", sampleId = "") {
     setImageId(id);
     setFileName(name.replace(/\.[^.]+$/, "") || "image");
     setExported("");
@@ -581,6 +600,7 @@ export default function App() {
     setRedo([]);
     setError("");
     setNotice(note);
+    setSelectedSampleId(sampleId);
   }
 
   async function handleFile(file) {
@@ -590,6 +610,19 @@ export default function App() {
       start(id, image, scaled ? "Large image: reduced to 1600 px on the longest side." : "", file.name);
     } catch (e) {
       setError(e.message);
+    }
+  }
+
+  async function loadBuiltin(sample) {
+    setSampleLoading(true);
+    setError("");
+    try {
+      const { imageId: id, image, scaled } = await uploadFromUrl(sample.url, sample.file);
+      start(id, image, scaled ? "Large image: reduced to 1600 px on the longest side." : "", sample.file, sample.id);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSampleLoading(false);
     }
   }
 
@@ -714,6 +747,14 @@ export default function App() {
         </span>
       </header>
 
+      <SampleCarousel
+        index={sampleIndex}
+        onIndexChange={setSampleIndex}
+        onSelect={loadBuiltin}
+        loading={sampleLoading}
+        selectedId={selectedSampleId}
+      />
+
       {!original ? (
         <main className="empty">
           <div
@@ -723,10 +764,10 @@ export default function App() {
             onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
           >
             <h2>Load an image to start</h2>
-            <p>Drop a JPEG, PNG or TIFF file here, or choose one from your computer.</p>
+            <p>Pick a sample above, drop a JPEG, PNG or TIFF here, or choose a file from your computer.</p>
             <div className="row">
               <button className="primary" onClick={() => fileRef.current.click()}>Choose image</button>
-              <button onClick={loadSample}>Use sample image</button>
+              <button onClick={loadSample}>Use generated test image</button>
             </div>
             {error && <p className="error" role="alert">{error}</p>}
           </div>
@@ -748,7 +789,7 @@ export default function App() {
             </div>
 
             <div className="formula">
-              <Formula tool={tool} params={params} pivot={pivot} img={committed} />
+              <Formula tool={tool} params={params} img={committed} />
               <span className="eqno">({t.eq})</span>
             </div>
             <p className="hint">{t.describe}</p>

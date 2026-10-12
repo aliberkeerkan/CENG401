@@ -30,9 +30,8 @@ export function brightness(src, { beta }) {
   return out;
 }
 
-// Eq. (9): g = clip(alpha (f - c) + c), pivot c = image mean intensity
-export function contrast(src, { alpha }) {
-  const c = stats(src).mean;
+// Eq. (9): g = clip(alpha (f - c) + c) around the pivot c (default: image mean)
+export function contrast(src, { alpha, c = stats(src).mean }) {
   const out = new ImageData(src.width, src.height);
   const s = src.data, d = out.data;
   for (let i = 0; i < s.length; i += 4) {

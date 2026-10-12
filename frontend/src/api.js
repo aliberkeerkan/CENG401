@@ -224,6 +224,23 @@ export function upload(file) {
   return mode === "server" ? serverUpload(file, file.name) : mockUpload(file, file.name);
 }
 
+/** Load a bundled sample from `public/` (same upload path as user files). */
+export async function uploadFromUrl(url, filename) {
+  let res;
+  try {
+    res = await fetch(url);
+  } catch {
+    throw new Error("Could not reach the sample image.");
+  }
+  if (!res.ok) throw new Error(`Sample "${filename}" is missing (${res.status}).`);
+  const blob = await res.blob();
+  const lower = filename.toLowerCase();
+  const type = blob.type
+    || (lower.endsWith(".png") ? "image/png" : lower.endsWith(".tif") || lower.endsWith(".tiff") ? "image/tiff" : "image/jpeg");
+  const file = new File([blob], filename, { type });
+  return upload(file);
+}
+
 export async function uploadSample(image) {
   const blob = await imageDataToBlob(image);
   const file = new File([blob], "sample.png", { type: "image/png" });

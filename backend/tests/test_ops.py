@@ -210,3 +210,11 @@ def test_mean_filters_handle_zero_pixels():
     salt[3, 3] = 255
     assert abs(filters.harmonic_mean(salt, 3)[3, 3, 0] - 100) < 15
     assert filters.harmonic_mean(x, 3)[3, 3, 0] < 1
+
+
+def test_contrast_with_explicit_pivot_eq9():
+    x = img([[[100, 100, 100], [200, 200, 200]]])
+    out = basic.contrast(x, alpha=2.0, c=100)  # 2 (f - 100) + 100
+    assert out[0, :, 0].tolist() == [100, 255]  # 300 clipped to 255
+    out = basic.contrast(x, alpha=0.5, c=0)
+    assert out[0, :, 0].tolist() == [50, 100]

@@ -15,6 +15,10 @@ class BrightnessParams(BaseModel):
 
 class ContrastParams(BaseModel):
     alpha: float = Field(gt=0, le=5, description="Gain α, Eq. (9)")
+    c: float | None = Field(
+        default=None, ge=0, le=255,
+        description="Pivot intensity c, Eq. (9). Default: mean luma of the input",
+    )
 
 
 class CropParams(BaseModel):

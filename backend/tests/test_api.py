@@ -191,3 +191,13 @@ def test_noise_and_mean_parameters_are_validated():
     for op in bad:
         r = client.post("/process", json={"image_id": image_id, "operations": [op]})
         assert r.status_code == 422, op
+
+
+def test_contrast_pivot_through_api():
+    arr = np.full((4, 4, 3), 100, dtype=np.uint8)
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    ops = [{"type": "contrast", "params": {"alpha": 2, "c": 80}}]  # 2 (100 - 80) + 80
+    r = client.post("/process", json={"image_id": image_id, "operations": ops})
+    assert np.all(decode(r) == 120)
+    bad = [{"type": "contrast", "params": {"alpha": 2, "c": 300}}]
+    assert client.post("/process", json={"image_id": image_id, "operations": bad}).status_code == 422

@@ -38,7 +38,11 @@ def brightness(rgb: np.ndarray, beta: float) -> np.ndarray:
     return clip(rgb + beta)
 
 
-def contrast(rgb: np.ndarray, alpha: float) -> np.ndarray:
-    """Eq. (9): g = clip(alpha (f - c) + c), with pivot c = mean luma of the input."""
-    c = round_half_up(luma(rgb)).mean()
+def contrast(rgb: np.ndarray, alpha: float, c: float | None = None) -> np.ndarray:
+    """Eq. (9): g = clip(alpha (f - c) + c) around the pivot intensity c.
+
+    Without c, the pivot is the mean luma of the input.
+    """
+    if c is None:
+        c = round_half_up(luma(rgb)).mean()
     return clip(round_half_up(alpha * (rgb - c) + c))
