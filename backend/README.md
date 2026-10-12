@@ -17,10 +17,13 @@ pip install -r requirements.txt
 
 ```bash
 .venv\Scripts\activate
-uvicorn app.main:app --reload
+python run.py
 ```
 
-- API: http://localhost:8000
+`run.py` is the same as `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`.
+`--host 0.0.0.0` lets phones and other PCs on the same network reach the API.
+
+- API: http://localhost:8000 (on another device: `http://<this-pc-ip>:8000`)
 - Interactive docs: http://localhost:8000/docs
 
 ## Test
@@ -41,7 +44,7 @@ pytest
 
 | Group | Operation types and parameters |
 |-------|--------------------------------|
-| Basic | `crop` {x, y, width, height}, `resize` {width, height, method}, `grayscale`, `brightness` {beta}, `contrast` {alpha, c (optional pivot; default: image mean luma)} |
+| Basic | `crop` {x, y, width, height}, `resize` {width, height, method}, `grayscale`, `brightness` {beta}, `contrast` {r_min, r_max: 0–255, r_min < r_max} |
 | Filters | `gaussian_blur` {sigma}, `median`, `arithmetic_mean`, `geometric_mean`, `harmonic_mean` {size: odd, 3–15} |
 | Noise | `salt_pepper_noise` {p_pepper, p_salt, seed}, `quantization_noise` {bits: 1–8}, `rayleigh_noise` {a, b, zero_mean, seed}, `uniform_noise` {a, b, seed} |
 
@@ -67,7 +70,7 @@ app/
     io.py            decode uploads (incl. 16-bit TIFF), encode PNG
     ops/
       __init__.py    operation registry and pipeline
-      basic.py       grayscale (6), brightness (8), contrast (9)
+      basic.py       grayscale (6), brightness (8), contrast stretching (r_min, r_max)
       geometry.py    crop (4), resize: nearest / bilinear (5)
       filters.py     Gaussian blur (10), mean filters (27)-(29), median (33)
       noise.py       salt-and-pepper (18), quantization (22), Rayleigh (24), uniform (25)
@@ -85,3 +88,5 @@ tests/               unit and API tests
 
 - `CORS_ORIGINS`: comma-separated list of allowed frontend origins.
   Default: `http://localhost:5173,http://127.0.0.1:5173`.
+  Private network origins (`192.168.x.x`, `10.x.x.x`, `172.16–31.x.x`, any
+  port) are always allowed, so a new DHCP address needs no change here.

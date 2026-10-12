@@ -14,11 +14,14 @@ class BrightnessParams(BaseModel):
 
 
 class ContrastParams(BaseModel):
-    alpha: float = Field(gt=0, le=5, description="Gain α, Eq. (9)")
-    c: float | None = Field(
-        default=None, ge=0, le=255,
-        description="Pivot intensity c, Eq. (9). Default: mean luma of the input",
-    )
+    r_min: float = Field(ge=0, le=254, description="Input level mapped to 0")
+    r_max: float = Field(ge=1, le=255, description="Input level mapped to L-1 = 255")
+
+    @model_validator(mode="after")
+    def min_below_max(self):
+        if self.r_min >= self.r_max:
+            raise ValueError("r_min must be smaller than r_max.")
+        return self
 
 
 class CropParams(BaseModel):

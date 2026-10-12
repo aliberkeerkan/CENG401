@@ -76,7 +76,7 @@ def test_errors():
     assert upload(b"not an image", name="x.txt").status_code == 415
     assert client.post("/process", json={"image_id": "missing", "operations": []}).status_code == 404
     image_id = upload(png_bytes(np.zeros((2, 2, 3), dtype=np.uint8))).json()["image_id"]
-    bad = {"image_id": image_id, "operations": [{"type": "contrast", "params": {"alpha": -1}}]}
+    bad = {"image_id": image_id, "operations": [{"type": "contrast", "params": {"r_min": 100, "r_max": 50}}]}
     assert client.post("/process", json=bad).status_code == 422
     unknown = {"image_id": image_id, "operations": [{"type": "sepia", "params": {}}]}
     assert client.post("/process", json=unknown).status_code == 422
@@ -193,11 +193,12 @@ def test_noise_and_mean_parameters_are_validated():
         assert r.status_code == 422, op
 
 
-def test_contrast_pivot_through_api():
-    arr = np.full((4, 4, 3), 100, dtype=np.uint8)
+def test_contrast_stretch_through_api():
+    arr = np.array([[[50] * 3, [100] * 3, [150] * 3]], dtype=np.uint8)
     image_id = upload(png_bytes(arr)).json()["image_id"]
-    ops = [{"type": "contrast", "params": {"alpha": 2, "c": 80}}]  # 2 (100 - 80) + 80
+    ops = [{"type": "contrast", "params": {"r_min": 50, "r_max": 150}}]
     r = client.post("/process", json={"image_id": image_id, "operations": ops})
-    assert np.all(decode(r) == 120)
-    bad = [{"type": "contrast", "params": {"alpha": 2, "c": 300}}]
-    assert client.post("/process", json={"image_id": image_id, "operations": bad}).status_code == 422
+    assert decode(r)[0, :, 0].tolist() == [0, 128, 255]
+    for bad in ({"r_min": 150, "r_max": 150}, {"r_min": -1, "r_max": 100}, {"r_min": 0, "r_max": 300}):
+        body = {"image_id": image_id, "operations": [{"type": "contrast", "params": bad}]}
+        assert client.post("/process", json=body).status_code == 422

@@ -20,16 +20,18 @@ def test_brightness_clips_to_valid_range():
     assert out.tolist() == [[[0, 0, 80]]]
 
 
-def test_contrast_identity_when_alpha_is_one():
-    rng = np.random.default_rng(0)
-    x = rng.integers(0, 256, size=(8, 8, 3)).astype(np.float64)
-    assert np.array_equal(basic.contrast(x, alpha=1.0), x)
+def test_contrast_stretch_maps_range_to_full_scale():
+    x = img([[[50, 50, 50], [100, 100, 100], [150, 150, 150]]])
+    out = basic.contrast(x, r_min=50, r_max=150)
+    assert out[0, :, 0].tolist() == [0, 128, 255]  # 127.5 rounds half up
+    # values outside [r_min, r_max] are clipped
+    out = basic.contrast(img([[[10, 10, 10], [200, 200, 200]]]), r_min=50, r_max=150)
+    assert out[0, :, 0].tolist() == [0, 255]
 
 
-def test_contrast_pivot_is_mean_luma():
-    x = img([[[100, 100, 100], [200, 200, 200]]])  # mean luma = 150
-    out = basic.contrast(x, alpha=2.0)
-    assert out[0, :, 0].tolist() == [50, 250]
+def test_contrast_identity_for_full_range():
+    x = np.random.default_rng(0).integers(0, 256, size=(8, 8, 3)).astype(np.float64)
+    assert np.array_equal(basic.contrast(x, r_min=0, r_max=255), x)
 
 
 def test_round_half_up_matches_javascript():
@@ -211,10 +213,3 @@ def test_mean_filters_handle_zero_pixels():
     assert abs(filters.harmonic_mean(salt, 3)[3, 3, 0] - 100) < 15
     assert filters.harmonic_mean(x, 3)[3, 3, 0] < 1
 
-
-def test_contrast_with_explicit_pivot_eq9():
-    x = img([[[100, 100, 100], [200, 200, 200]]])
-    out = basic.contrast(x, alpha=2.0, c=100)  # 2 (f - 100) + 100
-    assert out[0, :, 0].tolist() == [100, 255]  # 300 clipped to 255
-    out = basic.contrast(x, alpha=0.5, c=0)
-    assert out[0, :, 0].tolist() == [50, 100]

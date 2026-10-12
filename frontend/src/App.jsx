@@ -6,7 +6,7 @@ import {
   onRequest, onStatus, checkBackend, API_URL,
 } from "./api.js";
 import { BUILTIN_SAMPLES } from "./builtinSamples.js";
-import { applyOp, stats, sampleImage, gaussianKernel } from "./imageOps.js";
+import { applyOp, stats, sampleImage, gaussianKernel, rgbRange } from "./imageOps.js";
 
 // Tool definitions. `heavy` tools get a short delay before the preview is
 // computed so dragging a slider stays smooth. `backendOnly` tools are not
@@ -33,10 +33,10 @@ const TOOLS = {
   contrast: {
     label: "Contrast", eq: "9",
     sliders: [
-      { key: "alpha", min: 0.2, max: 3, step: 0.05, name: "α (gain)" },
-      { key: "c", min: 0, max: 255, step: 1, name: "c (pivot)" },
+      { key: "r_min", min: 0, max: 254, step: 1, name: "r_min (maps to 0)" },
+      { key: "r_max", min: 1, max: 255, step: 1, name: "r_max (maps to 255)" },
     ],
-    describe: "Stretches intensities around the pivot c, which starts at the image mean. α > 1 increases contrast; the level c stays fixed.",
+    describe: "Maps the input range [r_min, r_max] linearly onto [0, 255]. The sliders start at the image's darkest and brightest values, so applying stretches it to the full range. Values outside the range are clipped.",
   },
   gaussian_blur: {
     label: "Gaussian blur", eq: "10", heavy: true,
@@ -119,8 +119,11 @@ function defaultParams(tool, img) {
       return { x: Math.round(w * 0.1), y: Math.round(h * 0.1), width: Math.max(1, Math.round(w * 0.8)), height: Math.max(1, Math.round(h * 0.8)) };
     case "resize": return { width: w, height: h, method: "bilinear", lock: true };
     case "brightness": return { beta: 0 };
-    // the pivot starts at the image mean, the plan's example for Eq. (9)
-    case "contrast": return { alpha: 1, c: img ? Math.round(stats(img).mean) : 128 };
+    // start at the image's own range: applying stretches it to [0, 255]
+    case "contrast": {
+      const [r_min, r_max] = img ? rgbRange(img) : [0, 255];
+      return { r_min, r_max };
+    }
     case "gaussian_blur": return { sigma: 1.5 };
     case "median": return { size: 3 };
     case "arithmetic_mean":
@@ -139,7 +142,7 @@ function defaultParams(tool, img) {
 function isNeutral(tool, p, img) {
   if (!img) return true;
   if (tool === "brightness") return p.beta === 0;
-  if (tool === "contrast") return p.alpha === 1;
+  if (tool === "contrast") return p.r_min === 0 && p.r_max === 255;
   if (tool === "resize") return p.width === img.width && p.height === img.height;
   if (tool === "crop") return p.x === 0 && p.y === 0 && p.width === img.width && p.height === img.height;
   if (tool === "salt_pepper_noise") return p.p_pepper === 0 && p.p_salt === 0;
@@ -182,7 +185,7 @@ function formulaTex(tool, params, img) {
       return `g(x,y)=\\mathrm{clip}\\bigl(f(x,y)${sign}${Math.abs(params.beta)}\\bigr)`;
     }
     case "contrast":
-      return `\\begin{aligned} g&=\\mathrm{clip}\\bigl(\\alpha\\,(f-c)+c\\bigr)\\\\ \\alpha&=${fmt(params.alpha)},\\; c=${params.c} \\end{aligned}`;
+      return `\\begin{aligned} g&=\\mathrm{clip}\\!\\left(255\\cdot\\frac{f-r_{\\min}}{r_{\\max}-r_{\\min}}\\right)\\\\ r_{\\min}&=${params.r_min},\\; r_{\\max}=${params.r_max} \\end{aligned}`;
     case "gaussian_blur": {
       const n = gaussianKernel(params.sigma).length;
       return `\\begin{aligned} w(s,t)&\\propto\\exp\\!\\left(-\\frac{s^{2}+t^{2}}{2\\sigma^{2}}\\right)\\\\ \\sigma&=${fmt(params.sigma, 1)},\\;\\text{window }${n}\\times${n} \\end{aligned}`;
@@ -374,7 +377,7 @@ function opLabel(op) {
     case "resize": return `Resize to ${p.width}×${p.height} (${p.method})`;
     case "grayscale": return "Grayscale";
     case "brightness": return `Brightness β = ${p.beta > 0 ? "+" : ""}${p.beta}`;
-    case "contrast": return `Contrast α = ${fmt(p.alpha)}, c = ${p.c}`;
+    case "contrast": return `Contrast stretch [${p.r_min}, ${p.r_max}] → [0, 255]`;
     case "gaussian_blur": return `Gaussian blur σ = ${fmt(p.sigma, 1)}`;
     case "median": return `Median filter ${p.size}×${p.size}`;
     case "arithmetic_mean": return `Mean filter ${p.size}×${p.size}`;
@@ -451,6 +454,10 @@ function ToolControls({ tool, params, setParams, img }) {
     if (tool === "salt_pepper_noise") {
       const other = key === "p_pepper" ? "p_salt" : "p_pepper";
       p[key] = Math.min(value, 1 - params[other]);
+    }
+    if (tool === "contrast") {
+      if (key === "r_min") p.r_min = Math.min(value, params.r_max - 1);
+      if (key === "r_max") p.r_max = Math.max(value, params.r_min + 1);
     }
     if (tool === "uniform_noise") {
       if (key === "a") p.a = Math.min(value, params.b - 1);

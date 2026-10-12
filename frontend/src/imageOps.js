@@ -30,14 +30,28 @@ export function brightness(src, { beta }) {
   return out;
 }
 
-// Eq. (9): g = clip(alpha (f - c) + c) around the pivot c (default: image mean)
-export function contrast(src, { alpha, c = stats(src).mean }) {
+// smallest and largest value over the R, G, B channels
+export function rgbRange(img) {
+  const s = img.data;
+  let lo = 255, hi = 0;
+  for (let i = 0; i < s.length; i += 4) {
+    for (let k = 0; k < 3; k++) {
+      if (s[i + k] < lo) lo = s[i + k];
+      if (s[i + k] > hi) hi = s[i + k];
+    }
+  }
+  return lo < hi ? [lo, hi] : [0, 255];
+}
+
+// Contrast stretching: g = clip(255 (f - r_min) / (r_max - r_min))
+export function contrast(src, { r_min, r_max }) {
+  const span = r_max - r_min;
   const out = new ImageData(src.width, src.height);
   const s = src.data, d = out.data;
   for (let i = 0; i < s.length; i += 4) {
-    d[i] = clamp(Math.round(alpha * (s[i] - c) + c));
-    d[i + 1] = clamp(Math.round(alpha * (s[i + 1] - c) + c));
-    d[i + 2] = clamp(Math.round(alpha * (s[i + 2] - c) + c));
+    d[i] = clamp(Math.round(255 * (s[i] - r_min) / span));
+    d[i + 1] = clamp(Math.round(255 * (s[i + 1] - r_min) / span));
+    d[i + 2] = clamp(Math.round(255 * (s[i + 2] - r_min) / span));
     d[i + 3] = s[i + 3];
   }
   return out;

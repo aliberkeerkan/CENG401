@@ -38,11 +38,11 @@ def brightness(rgb: np.ndarray, beta: float) -> np.ndarray:
     return clip(rgb + beta)
 
 
-def contrast(rgb: np.ndarray, alpha: float, c: float | None = None) -> np.ndarray:
-    """Eq. (9): g = clip(alpha (f - c) + c) around the pivot intensity c.
+def contrast(rgb: np.ndarray, r_min: float, r_max: float) -> np.ndarray:
+    """Contrast stretching: g = clip((L-1) (f - r_min) / (r_max - r_min)).
 
-    Without c, the pivot is the mean luma of the input.
+    The input range [r_min, r_max] is mapped linearly onto [0, L-1];
+    values outside it are clipped. With r_min and r_max set to the
+    image's own minimum and maximum, the image fills the full range.
     """
-    if c is None:
-        c = round_half_up(luma(rgb)).mean()
-    return clip(round_half_up(alpha * (rgb - c) + c))
+    return clip(round_half_up((L - 1) * (rgb - r_min) / (r_max - r_min)))

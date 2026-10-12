@@ -13,7 +13,19 @@
 
 import { applyPipeline } from "./imageOps.js";
 
-export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// VITE_API_URL wins when set. Otherwise the backend is assumed on the same
+// host the page was opened with (localhost or a LAN IP such as
+// 192.168.1.20), so a phone on the same network reaches it too.
+function resolveApiUrl() {
+  const fromEnv = import.meta.env.VITE_API_URL;
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  if (typeof window !== "undefined" && window.location?.hostname) {
+    return `http://${window.location.hostname}:8000`;
+  }
+  return "http://localhost:8000";
+}
+
+export const API_URL = resolveApiUrl();
 const MAX_SIDE = 1600;
 
 let mode = "checking"; // "checking" | "server" | "mock"
