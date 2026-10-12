@@ -6,7 +6,9 @@ import {
 import { applyOp, stats, sampleImage, gaussianKernel } from "./imageOps.js";
 
 // Tool definitions. `heavy` tools get a short delay before the preview is
-// computed so dragging a slider stays smooth.
+// computed so dragging a slider stays smooth. `backendOnly` tools are not
+// implemented in imageOps.js: their preview comes from the backend via
+// processImage, and they are disabled while the backend is offline.
 const TOOLS = {
   crop: {
     label: "Crop", eq: "4",
@@ -22,25 +24,87 @@ const TOOLS = {
   },
   brightness: {
     label: "Brightness", eq: "8",
-    slider: { key: "beta", min: -100, max: 100, step: 1, name: "β (offset)" },
+    sliders: [{ key: "beta", min: -100, max: 100, step: 1, name: "β (offset)" }],
     describe: "Adds the same offset to every pixel. Values past 0 or 255 are clipped.",
   },
   contrast: {
     label: "Contrast", eq: "9",
-    slider: { key: "alpha", min: 0.2, max: 3, step: 0.05, name: "α (gain)" },
+    sliders: [{ key: "alpha", min: 0.2, max: 3, step: 0.05, name: "α (gain)" }],
     describe: "Stretches intensities around the image mean c. α > 1 increases contrast.",
   },
   gaussian_blur: {
     label: "Gaussian blur", eq: "10", heavy: true,
-    slider: { key: "sigma", min: 0.5, max: 10, step: 0.1, name: "σ (blur scale)" },
+    sliders: [{ key: "sigma", min: 0.5, max: 10, step: 0.1, name: "σ (blur scale)" }],
     describe: "Averages each pixel with its neighbours using Gaussian weights. Larger σ blurs more.",
   },
   median: {
     label: "Median filter", eq: "33", heavy: true,
-    slider: { key: "size", min: 3, max: 15, step: 2, name: "Window size" },
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
     describe: "Replaces each pixel with the median of its window. Removes salt-and-pepper noise and keeps edges.",
   },
+  arithmetic_mean: {
+    label: "Mean filter", eq: "27", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Softens additive noise such as Gaussian or uniform noise, but blurs the edges too.",
+  },
+  geometric_mean: {
+    label: "Geometric mean", eq: "28", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Like the mean filter, but preserves detail slightly better. A single 0 (pepper) pixel in the window darkens the result.",
+  },
+  harmonic_mean: {
+    label: "Harmonic mean", eq: "29", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Cleans salt noise well. With pepper noise the window is pulled towards zero and the image darkens.",
+  },
+  salt_pepper_noise: {
+    label: "Salt & pepper", eq: "18", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "p_pepper", min: 0, max: 0.5, step: 0.01, name: "Pₚ (pepper)" },
+      { key: "p_salt", min: 0, max: 0.5, step: 0.01, name: "Pₛ (salt)" },
+    ],
+    describe: "Sets random pixels to black (pepper) or white (salt). Other pixels keep their value.",
+  },
+  quantization_noise: {
+    label: "Quantization noise", eq: "22", backendOnly: true,
+    sliders: [{ key: "bits", min: 1, max: 8, step: 1, name: "Bit depth B" }],
+    describe: "Not random: reduces the number of gray levels to 2^B, so low B shows banding. Filters can soften banding but cannot restore the lost levels.",
+  },
+  rayleigh_noise: {
+    label: "Rayleigh noise", eq: "24", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "a", min: -100, max: 100, step: 1, name: "a (location)" },
+      { key: "b", min: 1, max: 2000, step: 10, name: "b (spread, = 2σ²)" },
+    ],
+    describe: "Its mean is positive, so it brightens the image. The zero-mean option removes that shift.",
+  },
+  uniform_noise: {
+    label: "Uniform noise", eq: "25", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "a", min: -100, max: 100, step: 1, name: "a (lower bound)" },
+      { key: "b", min: -100, max: 100, step: 1, name: "b (upper bound)" },
+    ],
+    describe: "Adds noise drawn uniformly from [a, b]. A range symmetric around 0 adds no brightness shift.",
+  },
 };
+
+// tools not implemented in imageOps.js: preview comes from the backend and
+// the tool is disabled while the backend is offline
+const BACKEND_ONLY = new Set(
+  Object.entries(TOOLS).filter(([, v]) => v.backendOnly).map(([k]) => k)
+);
+
+// noise tools whose params carry a seed
+const NOISE_TOOLS = new Set(["salt_pepper_noise", "rayleigh_noise", "uniform_noise"]);
+
+const newSeed = () => Math.floor(Math.random() * 2 ** 32);
+
+// tools that have no "do nothing" value: show their default effect on open
+const PREVIEW_ON_OPEN = new Set([
+  "gaussian_blur", "median",
+  "arithmetic_mean", "geometric_mean", "harmonic_mean",
+  "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
+]);
 
 function defaultParams(tool, img) {
   const w = img ? img.width : 1, h = img ? img.height : 1;
@@ -52,6 +116,15 @@ function defaultParams(tool, img) {
     case "contrast": return { alpha: 1 };
     case "gaussian_blur": return { sigma: 1.5 };
     case "median": return { size: 3 };
+    case "arithmetic_mean":
+    case "geometric_mean":
+    case "harmonic_mean": return { size: 3 };
+    // every noise step gets its own random seed when the tool is selected;
+    // the seed stays fixed while the user adjusts the other parameters
+    case "salt_pepper_noise": return { p_pepper: 0.05, p_salt: 0.05, seed: newSeed() };
+    case "quantization_noise": return { bits: 4 };
+    case "rayleigh_noise": return { a: 0, b: 400, zero_mean: false, seed: newSeed() };
+    case "uniform_noise": return { a: -20, b: 20, seed: newSeed() };
     default: return {};
   }
 }
@@ -62,6 +135,8 @@ function isNeutral(tool, p, img) {
   if (tool === "contrast") return p.alpha === 1;
   if (tool === "resize") return p.width === img.width && p.height === img.height;
   if (tool === "crop") return p.x === 0 && p.y === 0 && p.width === img.width && p.height === img.height;
+  if (tool === "salt_pepper_noise") return p.p_pepper === 0 && p.p_salt === 0;
+  if (tool === "quantization_noise") return p.bits === 8;
   return false;
 }
 
@@ -125,6 +200,61 @@ function Formula({ tool, params, pivot, img }) {
           <i>f̂</i>(<i>x</i>,<i>y</i>) = median{"{"}<i>g</i>(<i>s</i>,<i>t</i>){"}"}, <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
         </span>
       );
+    case "arithmetic_mean":
+      return (
+        <span className="math">
+          <i>f̂</i>(<i>x</i>,<i>y</i>) = (1/<i>mn</i>) Σ <i>g</i>(<i>s</i>,<i>t</i>), <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
+        </span>
+      );
+    case "geometric_mean":
+      return (
+        <span className="math">
+          <i>f̂</i>(<i>x</i>,<i>y</i>) = exp((1/<i>mn</i>) Σ ln(<i>g</i>(<i>s</i>,<i>t</i>) + ε)), <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
+        </span>
+      );
+    case "harmonic_mean":
+      return (
+        <span className="math">
+          <i>f̂</i>(<i>x</i>,<i>y</i>) = <i>mn</i> / Σ 1/(<i>g</i>(<i>s</i>,<i>t</i>) + ε), <i>S<sub>xy</sub></i> = <b>{params.size}×{params.size}</b>
+        </span>
+      );
+    case "salt_pepper_noise":
+      return (
+        <span className="math">
+          <i>g</i> = 0 with prob. <i>P<sub>p</sub></i> = <b>{fmt(params.p_pepper, 2)}</b>,
+          <i> L</i>−1 with prob. <i>P<sub>s</sub></i> = <b>{fmt(params.p_salt, 2)}</b>, <i>f</i> otherwise
+        </span>
+      );
+    case "quantization_noise": {
+      const delta = 255 / (2 ** params.bits - 1);
+      return (
+        <span className="math">
+          <i>q</i>(<i>f</i>) = Δ·round(<i>f</i>/Δ), Δ = 255/(2<sup><b>{params.bits}</b></sup> − 1) ≈ <b>{fmt(delta, 2)}</b>
+        </span>
+      );
+    }
+    case "rayleigh_noise": {
+      // plan 5.3.6: the positive noise mean brightens the image, the UI
+      // must say so — show the live mean and standard deviation
+      const mean = params.a + Math.sqrt((Math.PI * params.b) / 4);
+      const std = Math.sqrt((params.b * (4 - Math.PI)) / 4);
+      return (
+        <span className="math">
+          <i>p</i>(<i>z</i>) = (2/<i>b</i>)(<i>z</i>−<i>a</i>) e<sup>−(<i>z</i>−<i>a</i>)²/<i>b</i></sup>, <i>g</i> = clip(<i>f</i> + <i>z</i>);
+          noise mean <b>{fmt(params.zero_mean ? 0 : mean, 1)}</b>, std <b>{fmt(std, 1)}</b>
+          {params.zero_mean ? " (mean subtracted)" : ""}
+        </span>
+      );
+    }
+    case "uniform_noise": {
+      const std = (params.b - params.a) / Math.sqrt(12);
+      return (
+        <span className="math">
+          <i>p</i>(<i>z</i>) = 1/(<i>b</i>−<i>a</i>) on [<b>{params.a}</b>, <b>{params.b}</b>], <i>g</i> = clip(<i>f</i> + <i>z</i>);
+          noise mean <b>{fmt((params.a + params.b) / 2, 1)}</b>, std <b>{fmt(std, 1)}</b>
+        </span>
+      );
+    }
     default:
       return null;
   }
@@ -230,6 +360,13 @@ function opLabel(op) {
     case "contrast": return `Contrast α = ${fmt(p.alpha)}`;
     case "gaussian_blur": return `Gaussian blur σ = ${fmt(p.sigma, 1)}`;
     case "median": return `Median filter ${p.size}×${p.size}`;
+    case "arithmetic_mean": return `Mean filter ${p.size}×${p.size}`;
+    case "geometric_mean": return `Geometric mean ${p.size}×${p.size}`;
+    case "harmonic_mean": return `Harmonic mean ${p.size}×${p.size}`;
+    case "salt_pepper_noise": return `Salt & pepper Pₚ = ${fmt(p.p_pepper, 2)}, Pₛ = ${fmt(p.p_salt, 2)}`;
+    case "quantization_noise": return `Quantization noise B = ${p.bits} (${2 ** p.bits} levels)`;
+    case "rayleigh_noise": return `Rayleigh noise a = ${p.a}, b = ${p.b}${p.zero_mean ? ", zero-mean" : ""}`;
+    case "uniform_noise": return `Uniform noise [${p.a}, ${p.b}]`;
     default: return op.type;
   }
 }
@@ -288,16 +425,60 @@ function ToolControls({ tool, params, setParams, img }) {
       </>
     );
   }
-  if (!t.slider) return null;
-  const s = t.slider;
-  const value = params[s.key];
-  const shown = tool === "median" ? `${value} × ${value}` : s.step < 1 ? fmt(value, s.step < 0.1 ? 2 : 1) : value;
+  if (!t.sliders) return null;
+
+  // keep invalid values out of the UI so the user never hits a 422:
+  // Pp + Ps <= 1, a < b for uniform noise, b >= 1 for Rayleigh
+  const setParam = (key, value) => {
+    const p = { ...params, [key]: value };
+    if (tool === "salt_pepper_noise") {
+      const other = key === "p_pepper" ? "p_salt" : "p_pepper";
+      p[key] = Math.min(value, 1 - params[other]);
+    }
+    if (tool === "uniform_noise") {
+      if (key === "a") p.a = Math.min(value, params.b - 1);
+      if (key === "b") p.b = Math.max(value, params.a + 1);
+    }
+    setParams(p);
+  };
+
+  const formatSlider = (s, value) =>
+    s.key === "size" ? `${value} × ${value}` : s.step < 1 ? fmt(value, s.step < 0.1 ? 2 : 1) : value;
+
   return (
-    <label className="slider">
-      <span>{s.name}<output>{shown}</output></span>
-      <input type="range" min={s.min} max={s.max} step={s.step} value={value}
-        onChange={(e) => setParams({ [s.key]: Number(e.target.value) })} />
-    </label>
+    <>
+      {t.sliders.map((s) => {
+        // with zero_mean on, the mean a + √(πb/4) is subtracted, so a has
+        // no effect at all — disable the slider and say why
+        const disabled = tool === "rayleigh_noise" && s.key === "a" && params.zero_mean;
+        return (
+          <label className="slider" key={s.key}>
+            <span>{s.name}<output>{formatSlider(s, params[s.key])}</output></span>
+            <input type="range" min={s.min} max={s.max} step={s.step} value={params[s.key]}
+              disabled={disabled}
+              onChange={(e) => setParam(s.key, Number(e.target.value))} />
+          </label>
+        );
+      })}
+      {tool === "rayleigh_noise" && (
+        <>
+          <label className="check">
+            <input type="checkbox" checked={params.zero_mean}
+              onChange={(e) => setParams({ ...params, zero_mean: e.target.checked })} />
+            Subtract the mean (no brightening)
+          </label>
+          {params.zero_mean && <p className="hint">Zero-mean mode: a has no effect.</p>}
+        </>
+      )}
+      {NOISE_TOOLS.has(tool) && (
+        <div className="row">
+          <button onClick={() => setParams({ ...params, seed: newSeed() })}>New noise pattern</button>
+        </div>
+      )}
+      {tool === "salt_pepper_noise" && (
+        <p className="hint">Total corrupted pixels: {fmt((params.p_pepper + params.p_salt) * 100, 1)}%.</p>
+      )}
+    </>
   );
 }
 
@@ -324,8 +505,9 @@ export default function App() {
   const [exported, setExported] = useState("");
   const fileRef = useRef(null);
   const timer = useRef(0);
+  const previewReq = useRef(0);
 
-  useEffect(() => onRequest((e) => setLog((l) => [e, ...l].slice(0, 40))), []);
+  useEffect(() => onRequest((e) => setLog((l) => [e, ...l].slice(0, 100))), []);
   useEffect(() => onStatus(setBackend), []);
   useEffect(() => { checkBackend(); }, []);
 
@@ -344,13 +526,34 @@ export default function App() {
   const pivot = useMemo(() => (committed ? stats(committed).mean : 128), [committed]);
   const neutral = isNeutral(tool, params, committed);
 
-  // live preview of the tool being adjusted (local only, not sent to the backend)
+  // live preview of the tool being adjusted
   useEffect(() => {
     if (!committed) return;
     clearTimeout(timer.current);
     if (tool === "crop" || tool === "grayscale" || neutral || !dirty) {
       setPreview(null); setComputing(false); return;
     }
+    // backend-only tools are not in imageOps.js: their preview is computed
+    // by the backend with the applied steps plus the step being edited.
+    // The slider fires many requests, so debounce; replies can arrive out
+    // of order, so only the latest request may update the state.
+    if (BACKEND_ONLY.has(tool)) {
+      if (backend !== "server") { setPreview(null); setComputing(false); return; }
+      const id = ++previewReq.current;
+      setComputing(true);
+      timer.current = setTimeout(async () => {
+        try {
+          const out = await processImage(imageId, [...ops, { type: tool, params: opParams(tool, params) }]);
+          if (id === previewReq.current) setPreview(out);
+        } catch (e) {
+          if (id === previewReq.current) { setPreview(null); setError(e.message); }
+        } finally {
+          if (id === previewReq.current) setComputing(false);
+        }
+      }, 300);
+      return () => clearTimeout(timer.current);
+    }
+    // local preview with applyOp (same result as the backend for these ops)
     const run = () => {
       try {
         setPreview(applyOp(committed, { type: tool, params: opParams(tool, params) }));
@@ -366,7 +569,7 @@ export default function App() {
       timer.current = setTimeout(run, 0);
     }
     return () => clearTimeout(timer.current);
-  }, [committed, tool, params, neutral, dirty]);
+  }, [committed, tool, params, neutral, dirty, backend, imageId, ops]);
 
   function start(id, img, note = "", name = "image") {
     setImageId(id);
@@ -402,8 +605,8 @@ export default function App() {
   function selectTool(t) {
     setTool(t);
     setParams(defaultParams(t, committed));
-    // filters have no "do nothing" value, so show their default effect right away
-    setDirty(t === "gaussian_blur" || t === "median");
+    // these tools have no "do nothing" value, so show their default effect right away
+    setDirty(PREVIEW_ON_OPEN.has(t));
   }
 
   // Returns true when the backend accepted the new operation list.
@@ -535,8 +738,11 @@ export default function App() {
             <div className="tool-list" role="tablist" aria-label="Tools">
               {Object.entries(TOOLS).map(([k, v]) => (
                 <button key={k} role="tab" aria-selected={tool === k}
+                  disabled={v.backendOnly && backend !== "server"}
+                  title={v.backendOnly && backend !== "server" ? "Needs backend" : undefined}
                   className={"tool" + (tool === k ? " on" : "")} onClick={() => selectTool(k)}>
                   {v.label}
+                  {v.backendOnly && backend !== "server" && <span className="note"> (needs backend)</span>}
                 </button>
               ))}
             </div>
