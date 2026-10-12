@@ -38,7 +38,14 @@ def brightness(rgb: np.ndarray, beta: float) -> np.ndarray:
     return clip(rgb + beta)
 
 
-def contrast(rgb: np.ndarray, alpha: float) -> np.ndarray:
-    """Eq. (9): g = clip(alpha (f - c) + c), with pivot c = mean luma of the input."""
-    c = round_half_up(luma(rgb)).mean()
-    return clip(round_half_up(alpha * (rgb - c) + c))
+def contrast(rgb: np.ndarray, low: float, high: float) -> np.ndarray:
+    """Eq. (9): Gonzalez–Woods contrast stretching.
+
+    g = clip( 255 (f − r₁) / (r₂ − r₁) ) with r₁ = low, r₂ = high.
+    Raising low compresses the dark end; lowering high compresses the bright end.
+    low < 0 or high > 255 expands that end (reduces contrast there).
+    """
+    span = high - low
+    if span <= 0:
+        raise ValueError("High (r₂) must be greater than Low (r₁).")
+    return clip(round_half_up(255.0 * (rgb - low) / span))

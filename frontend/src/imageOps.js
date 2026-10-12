@@ -30,15 +30,15 @@ export function brightness(src, { beta }) {
   return out;
 }
 
-// Eq. (9): g = clip(alpha (f - c) + c), pivot c = image mean intensity
-export function contrast(src, { alpha }) {
-  const c = stats(src).mean;
+// Eq. (9): Gonzalez–Woods contrast stretch  g = clip(255 (f − r₁) / (r₂ − r₁))
+export function contrast(src, { low, high }) {
+  const span = high - low;
   const out = new ImageData(src.width, src.height);
   const s = src.data, d = out.data;
   for (let i = 0; i < s.length; i += 4) {
-    d[i] = clamp(Math.round(alpha * (s[i] - c) + c));
-    d[i + 1] = clamp(Math.round(alpha * (s[i + 1] - c) + c));
-    d[i + 2] = clamp(Math.round(alpha * (s[i + 2] - c) + c));
+    d[i] = clamp(Math.round(255 * (s[i] - low) / span));
+    d[i + 1] = clamp(Math.round(255 * (s[i + 1] - low) / span));
+    d[i + 2] = clamp(Math.round(255 * (s[i + 2] - low) / span));
     d[i + 3] = s[i + 3];
   }
   return out;
@@ -191,9 +191,53 @@ export function median(src, { size }) {
   return out;
 }
 
+// Same LCG as the backend so a committed salt-and-pepper step matches the preview.
+function lcg(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(1664525, s) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+// Gonzalez–Woods salt-and-pepper: P_a → 0 (pepper), P_b → 255 (salt), else f.
+export function saltPepper(src, { pepper, salt }) {
+  const rand = lcg(1);
+  const out = new ImageData(src.width, src.height);
+  const s = src.data, d = out.data;
+  for (let i = 0; i < s.length; i += 4) {
+    const u = rand();
+    const v = u < pepper ? 0 : u < pepper + salt ? 255 : -1;
+    d[i] = v < 0 ? s[i] : v;
+    d[i + 1] = v < 0 ? s[i + 1] : v;
+    d[i + 2] = v < 0 ? s[i + 2] : v;
+    d[i + 3] = s[i + 3];
+  }
+  return out;
+}
+
+// Uniform quantizer: Δ = 255 / (2^b − 1), g = clip(Δ · round(f / Δ)).
+// The error is modeled as e ~ U(−Δ/2, Δ/2), so σ² = Δ²/12.
+export function quantization(src, { bits }) {
+  const out = new ImageData(src.width, src.height);
+  const s = src.data, d = out.data;
+  if (bits >= 8) {
+    d.set(s);
+    return out;
+  }
+  const step = 255 / (2 ** bits - 1);
+  for (let i = 0; i < s.length; i += 4) {
+    d[i] = clamp(Math.round(s[i] / step) * step);
+    d[i + 1] = clamp(Math.round(s[i + 1] / step) * step);
+    d[i + 2] = clamp(Math.round(s[i + 2] / step) * step);
+    d[i + 3] = s[i + 3];
+  }
+  return out;
+}
+
 export const OPS = {
   crop, resize, grayscale, brightness, contrast,
-  gaussian_blur: gaussianBlur, median,
+  gaussian_blur: gaussianBlur, median, salt_pepper: saltPepper, quantization,
 };
 
 export function applyOp(img, op) {

@@ -9,7 +9,10 @@ npm install
 npm run dev
 ```
 
-Then open http://localhost:5173 in the browser.
+- This PC: http://localhost:5173  
+- Same network: use the **Network** URL Vite prints (e.g. `http://192.168.1.20:5173`)
+
+Vite binds to all interfaces (`host: true`). Backend must also listen on `0.0.0.0` (see `../backend/README.md`).
 
 ## Structure
 
@@ -18,7 +21,6 @@ Then open http://localhost:5173 in the browser.
 | `src/App.jsx` | UI: upload, tools, original/processed view, history, histogram, request log |
 | `src/imageOps.js` | Operations for instant previews: crop (4), resize (5), grayscale (6), brightness (8), contrast (9), Gaussian blur (10), median (33); histogram statistics (12–14). Same results as the backend |
 | `src/api.js` | API layer. Talks to the FastAPI backend; simulates it in the browser if the backend is not running |
-| `src/App.jsx` (backend-only tools) | Salt & pepper (18), quantization (22), Rayleigh (24) and uniform (25) noise; arithmetic (27), geometric (28) and harmonic (29) mean filters. Preview and apply always run on the FastAPI backend — these tools are disabled ("needs backend") when the backend is not connected |
 | `src/styles.css` | Styles (light/dark theme) |
 
 ## Backend
@@ -28,5 +30,6 @@ the top right shows "Backend connected" when the frontend reaches it.
 If the backend is not running, the app still works: requests are simulated
 in the browser and the badge says so.
 
-The backend address defaults to `http://localhost:8000`. To change it, copy
-`.env.example` to `.env.local` and edit `VITE_API_URL`.
+By default the backend address is `http://<page-hostname>:8000` (works for
+localhost and LAN IPs). To force a fixed address, copy `.env.example` to
+`.env.local` and set `VITE_API_URL`.
