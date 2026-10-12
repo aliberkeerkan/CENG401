@@ -18,6 +18,7 @@ Then open http://localhost:5173 in the browser.
 | `src/App.jsx` | UI: upload, tools, original/processed view, history, histogram, request log |
 | `src/imageOps.js` | Operations for instant previews: crop (4), resize (5), grayscale (6), brightness (8), contrast (9), Gaussian blur (10), median (33); histogram statistics (12–14). Same results as the backend |
 | `src/api.js` | API layer. Talks to the FastAPI backend; simulates it in the browser if the backend is not running |
+| `src/App.jsx` (backend-only tools) | Salt & pepper (18), quantization (22), Rayleigh (24) and uniform (25) noise; arithmetic (27), geometric (28) and harmonic (29) mean filters. Preview and apply always run on the FastAPI backend — these tools are disabled ("needs backend") when the backend is not connected |
 | `src/styles.css` | Styles (light/dark theme) |
 
 ## Backend
