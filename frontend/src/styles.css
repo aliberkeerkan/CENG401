@@ -146,7 +146,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .tools {
   position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1rem);
   max-height: calc(100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
-  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  overflow-y: auto; overflow-x: hidden;
   scrollbar-width: none; padding-top: 0;
 }
 .tools::-webkit-scrollbar { display: none; }
@@ -288,9 +288,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 
 @media (max-width: 900px) {
   .work, .work.tools-closed { grid-template-columns: minmax(0, 1fr); }
-  /* stacked layout: the panel no longer sticks, but keeps its own scroll
-     so the images below are reached quickly; closed, only its header shows */
-  .tools { position: static; max-height: 60vh; }
+  /* stacked layout, as on a phone: the panel is part of the page and
+     scrolls with it; closed, only its header shows */
+  .tools { position: static; max-height: none; overflow-y: visible; }
+  .tools-head { position: static; }
   .tools-body { width: auto; }
   .tools.closed { padding-inline: 1rem; }
   .tools.closed .tools-head { flex-direction: row; padding-bottom: 0.85rem; }

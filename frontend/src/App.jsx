@@ -599,11 +599,32 @@ export default function App() {
   const [sampleLoading, setSampleLoading] = useState(false);
   const fileRef = useRef(null);
   const timer = useRef(0);
+  const toolsRef = useRef(null);
   const previewReq = useRef(0);
 
   useEffect(() => onRequest((e) => setLog((l) => [e, ...l].slice(0, 100))), []);
   useEffect(() => onStatus(setBackend), []);
   useEffect(() => { checkBackend(); }, []);
+
+  // Scrolling down over the tools panel moves the page first, until the
+  // panel reaches its sticky position and is fully on screen; only then
+  // does the panel scroll its own content. Scrolling up empties the
+  // panel first, then the page follows (normal scroll chaining).
+  useEffect(() => {
+    const panel = toolsRef.current;
+    if (!panel) return;
+    function onWheel(e) {
+      if (e.deltaY <= 0 || getComputedStyle(panel).position !== "sticky") return;
+      const stickyTop = parseFloat(getComputedStyle(panel).top) || 0;
+      const pageEnd = document.documentElement.scrollHeight - window.innerHeight;
+      if (panel.getBoundingClientRect().top <= stickyTop + 1 || window.scrollY >= pageEnd - 1) return;
+      e.preventDefault();
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? window.innerHeight : 1;
+      window.scrollBy(0, e.deltaY * unit);
+    }
+    panel.addEventListener("wheel", onWheel, { passive: false });
+    return () => panel.removeEventListener("wheel", onWheel);
+  }, [original]);
 
   // new result (apply, undo, redo, reset, new image): reset the tool's controls
   useEffect(() => {
@@ -868,7 +889,7 @@ export default function App() {
         </main>
       ) : (
         <main className={"work" + (toolsOpen ? "" : " tools-closed")}>
-          <aside className={"tools panel" + (toolsOpen ? "" : " closed")} aria-label="Tools">
+          <aside ref={toolsRef} className={"tools panel" + (toolsOpen ? "" : " closed")} aria-label="Tools">
             <div className="tools-head">
               <button type="button" className="icon-btn" onClick={() => setToolsOpen((o) => !o)}
                 aria-expanded={toolsOpen} aria-controls="tools-body"
