@@ -94,6 +94,26 @@ const TOOLS = {
   },
 };
 
+// The tools panel first lists these groups (the plan's feature groups,
+// Table 1); choosing one shows its tools.
+const CATEGORIES = [
+  {
+    id: "basic", label: "Basic tools",
+    describe: "Crop, resize, grayscale, brightness, contrast and blur.",
+    tools: ["crop", "resize", "grayscale", "brightness", "contrast", "gaussian_blur"],
+  },
+  {
+    id: "noise", label: "Noise",
+    describe: "Degrade the image with a noise model to test the filters on.",
+    tools: ["salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise"],
+  },
+  {
+    id: "filters", label: "Filters",
+    describe: "Remove noise with mean and median filters.",
+    tools: ["arithmetic_mean", "geometric_mean", "harmonic_mean", "median"],
+  },
+];
+
 // tools not implemented in imageOps.js: preview comes from the backend and
 // the tool is disabled while the backend is offline
 const BACKEND_ONLY = new Set(
@@ -513,8 +533,9 @@ export default function App() {
   const [committed, setCommitted] = useState(null);
   const [ops, setOps] = useState([]);
   const [redo, setRedo] = useState([]);
-  const [tool, setTool] = useState("brightness");
-  const [params, setParams] = useState(defaultParams("brightness"));
+  const [category, setCategory] = useState(null);
+  const [tool, setTool] = useState(null);
+  const [params, setParams] = useState({});
   const [preview, setPreview] = useState(null);
   const [computing, setComputing] = useState(false);
   // true once the user has changed the controls (or opened a filter tool)
@@ -557,7 +578,7 @@ export default function App() {
   useEffect(() => {
     if (!committed) return;
     clearTimeout(timer.current);
-    if (tool === "crop" || tool === "grayscale" || neutral || !dirty) {
+    if (!tool || tool === "crop" || tool === "grayscale" || neutral || !dirty) {
       setPreview(null); setComputing(false); return;
     }
     // backend-only tools are not in imageOps.js: their preview is computed
@@ -643,6 +664,23 @@ export default function App() {
     }
   }
 
+  // Closing the tool discards its unapplied change, like Cancel.
+  function closeTool() {
+    setTool(null);
+    setParams({});
+    setDirty(false);
+  }
+
+  function openCategory(id) {
+    setCategory(id);
+    closeTool();
+  }
+
+  function backToCategories() {
+    setCategory(null);
+    closeTool();
+  }
+
   function selectTool(t) {
     setTool(t);
     setParams(defaultParams(t, committed));
@@ -708,7 +746,8 @@ export default function App() {
     }
   }
 
-  const t = TOOLS[tool];
+  const t = tool ? TOOLS[tool] : null;
+  const cat = CATEGORIES.find((c) => c.id === category);
   const shown = preview || committed;
   const processedNote = computing
     ? "Computing preview…"
@@ -782,34 +821,69 @@ export default function App() {
         </main>
       ) : (
         <main className="work">
-          <aside className="tools panel">
-            <h3>Tools</h3>
-            <div className="tool-list" role="tablist" aria-label="Tools">
-              {Object.entries(TOOLS).map(([k, v]) => (
-                <button key={k} role="tab" aria-selected={tool === k}
-                  disabled={v.backendOnly && backend !== "server"}
-                  title={v.backendOnly && backend !== "server" ? "Needs backend" : undefined}
-                  className={"tool" + (tool === k ? " on" : "")} onClick={() => selectTool(k)}>
-                  {v.label}
-                  {v.backendOnly && backend !== "server" && <span className="note"> (needs backend)</span>}
+          <aside className="tools panel" aria-label="Tools">
+            <div className="tools-head">
+              <h3>{cat ? cat.label : "Tools"}</h3>
+              {cat && (
+                <button type="button" className="back" onClick={backToCategories}
+                  aria-label="Back to categories" title="Back to categories">
+                  ←
                 </button>
-              ))}
-            </div>
-
-            <div className="formula">
-              <Formula tool={tool} params={params} img={committed} />
-              <span className="eqno">({t.eq})</span>
-            </div>
-            <p className="hint">{t.describe}</p>
-
-            <ToolControls tool={tool} params={params} setParams={editParams} img={committed} />
-
-            <div className="row">
-              <button className="primary" onClick={apply} disabled={neutral || busy}>Apply {t.label.toLowerCase()}</button>
-              {tool !== "grayscale" && (
-                <button onClick={() => { setParams(defaultParams(tool, committed)); setDirty(false); }} disabled={busy}>Cancel</button>
               )}
             </div>
+
+            {!cat ? (
+              <div className="category-list">
+                {CATEGORIES.map((c) => (
+                  <button key={c.id} type="button" className="category" onClick={() => openCategory(c.id)}>
+                    <span className="category-text">
+                      <strong>{c.label}</strong>
+                      <span>{c.describe}</span>
+                    </span>
+                    <span className="category-count">{c.tools.length}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
+                <div className="tool-list" role="tablist" aria-label={cat.label}>
+                  {cat.tools.map((k) => {
+                    const v = TOOLS[k];
+                    const offline = v.backendOnly && backend !== "server";
+                    return (
+                      <button key={k} role="tab" aria-selected={tool === k}
+                        disabled={offline}
+                        title={offline ? "Needs backend" : undefined}
+                        className={"tool" + (tool === k ? " on" : "")} onClick={() => selectTool(k)}>
+                        {v.label}
+                        {offline && <span className="note"> (needs backend)</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {!t ? (
+                  <p className="hint">Choose a tool to see its formula and controls.</p>
+                ) : (
+                  <>
+                    <div className="formula">
+                      <Formula tool={tool} params={params} img={committed} />
+                      <span className="eqno">({t.eq})</span>
+                    </div>
+                    <p className="hint">{t.describe}</p>
+
+                    <ToolControls tool={tool} params={params} setParams={editParams} img={committed} />
+
+                    <div className="row">
+                      <button className="primary" onClick={apply} disabled={neutral || busy}>Apply {t.label.toLowerCase()}</button>
+                      {tool !== "grayscale" && (
+                        <button onClick={() => { setParams(defaultParams(tool, committed)); setDirty(false); }} disabled={busy}>Cancel</button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </>
+            )}
 
             <h3 className="gap">History</h3>
             {ops.length === 0 ? (

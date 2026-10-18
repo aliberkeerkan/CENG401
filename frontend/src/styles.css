@@ -132,6 +132,39 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 
 /* workspace */
 .work { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1rem; align-items: start; }
+
+/* The tools panel stays on screen and scrolls on its own, so a long tool
+   does not move the page and the images stay in view. */
+.tools {
+  position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1rem);
+  max-height: calc(100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  overflow-y: auto; overscroll-behavior: contain; padding-top: 0;
+}
+.tools-head {
+  position: sticky; top: 0; z-index: 1; background: var(--panel);
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  padding: 1rem 0 0.6rem; margin-bottom: 0.2rem;
+}
+.tools-head h3 { margin: 0; }
+.back {
+  flex: 0 0 auto; width: 2rem; height: 2rem; padding: 0; border-radius: 999px;
+  display: grid; place-items: center; font-size: 1.05rem; line-height: 1;
+}
+
+.category-list { display: grid; gap: 0.5rem; }
+.category {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  text-align: left; padding: 0.7rem 0.8rem;
+}
+.category:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.category-text { display: grid; gap: 0.15rem; }
+.category-text strong { font-weight: 600; }
+.category-text span { color: var(--muted); font-size: 0.82rem; }
+.category-count {
+  flex: 0 0 auto; min-width: 1.6rem; padding: 0.05rem 0.45rem; border-radius: 999px;
+  background: var(--paper); color: var(--muted); font-size: 0.78rem; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .bottom { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem; }
 
 .tool-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem; }
@@ -209,6 +242,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 
 @media (max-width: 900px) {
   .work { grid-template-columns: 1fr; }
+  /* stacked layout: the panel no longer sticks, but keeps its own scroll
+     so the images below are reached quickly */
+  .tools { position: static; max-height: 60vh; }
   .bottom { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
