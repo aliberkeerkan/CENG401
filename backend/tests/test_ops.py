@@ -213,3 +213,60 @@ def test_mean_filters_handle_zero_pixels():
     assert abs(filters.harmonic_mean(salt, 3)[3, 3, 0] - 100) < 15
     assert filters.harmonic_mean(x, 3)[3, 3, 0] < 1
 
+
+# ---------- frequency-domain filters (G&W 4.10 and 5.8) ----------
+from app.imaging.ops import frequency  # noqa: E402
+
+FREQ = np.random.default_rng(2).integers(0, 256, (48, 48, 3)).astype(np.float64)
+
+
+def test_band_reject_passes_constant_image():
+    x = np.full((32, 32, 3), 120.0)
+    for kind in ("ideal", "butterworth", "gaussian"):
+        out = frequency.band_reject(x, c0=0.30, width=0.10, kind=kind, n=2)
+        assert abs(out.mean() - 120) < 2
+
+
+def test_band_pass_rejects_dc():
+    x = np.full((32, 32, 3), 120.0)
+    out = frequency.band_pass(x, c0=0.30, width=0.10, kind="butterworth", n=2)
+    assert out.mean() < 15
+
+
+def test_band_pass_is_complement_of_reject_eq148():
+    # Eq. (4-148) is on the transfer function. After inverse DFT, clip/round
+    # of a band-pass (often near 0) breaks an exact spatial sum.
+    d = frequency._radial_distance(64, 64)
+    for kind in ("ideal", "butterworth", "gaussian"):
+        h_br = frequency.band_reject_transfer(d, 0.25, 0.10, kind, n=2)
+        assert np.allclose(h_br + (1.0 - h_br), 1.0)
+
+
+def test_band_reject_transfer_ideal_table47():
+    d = frequency._radial_distance(64, 64)
+    h = frequency.band_reject_transfer(d, c0=0.25, width=0.10, kind="ideal")
+    d_max = d.max()
+    c0, w = 0.25 * d_max, 0.10 * d_max
+    inside = (d >= c0 - w / 2) & (d <= c0 + w / 2)
+    assert np.all(h[inside] == 0) and np.all(h[~inside] == 1)
+    assert np.allclose(h + (1 - h), 1)
+
+
+def test_wiener_identity_when_k_zero():
+    assert np.array_equal(frequency.wiener(FREQ, k=0), FREQ)
+
+
+def test_wiener_reduces_variance():
+    out = frequency.wiener(FREQ, k=0.4)
+    assert out.var() < FREQ.var()
+    assert out.min() >= 0 and out.max() <= 255
+
+
+def test_kalman_keeps_constant_and_smooths_impulse():
+    x = np.full((21, 21, 3), 77.0)
+    assert np.array_equal(frequency.kalman(x, q=2, r=80), x)
+    impulse = x.copy()
+    impulse[10, 10] = 255
+    out = frequency.kalman(impulse, q=1, r=200)
+    assert 77 < out[10, 10, 0] < 255
+

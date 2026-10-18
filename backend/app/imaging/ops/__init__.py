@@ -13,7 +13,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import basic, filters, geometry, noise
+from . import basic, filters, frequency, geometry, noise
 from .geometry import OperationError
 
 
@@ -38,6 +38,10 @@ OPERATIONS: dict[str, OpSpec] = {
     "quantization_noise": OpSpec(noise.quantization),
     "rayleigh_noise": OpSpec(noise.rayleigh),
     "uniform_noise": OpSpec(noise.uniform),
+    "band_reject": OpSpec(frequency.band_reject),
+    "band_pass": OpSpec(frequency.band_pass),
+    "wiener": OpSpec(frequency.wiener),
+    "kalman": OpSpec(frequency.kalman),
 }
 
 

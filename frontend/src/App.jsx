@@ -92,6 +92,37 @@ const TOOLS = {
     ],
     describe: "Adds noise drawn uniformly from [a, b]. A range symmetric around 0 adds no brightness shift.",
   },
+  band_reject: {
+    label: "Band-reject filter", eq: "4.10", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "c0", min: 0.04, max: 0.80, step: 0.01, name: "C₀ (band centre / Dmax)" },
+      { key: "width", min: 0.02, max: 0.50, step: 0.01, name: "W (band width / Dmax)" },
+      { key: "n", min: 1, max: 8, step: 1, name: "n (Butterworth order)" },
+    ],
+    describe: "Gonzalez–Woods Table 4.7. Removes a ring of frequencies around C₀. Ideal rings; Gaussian is the smoothest.",
+  },
+  band_pass: {
+    label: "Band-pass filter", eq: "4.148", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "c0", min: 0.04, max: 0.80, step: 0.01, name: "C₀ (band centre / Dmax)" },
+      { key: "width", min: 0.02, max: 0.50, step: 0.01, name: "W (band width / Dmax)" },
+      { key: "n", min: 1, max: 8, step: 1, name: "n (Butterworth order)" },
+    ],
+    describe: "Eq. (4-148): H_BP = 1 − H_BR. Keeps only the ring around C₀, so the result looks like edges or periodic texture.",
+  },
+  wiener: {
+    label: "Wiener filter", eq: "5.85", heavy: true, backendOnly: true,
+    sliders: [{ key: "k", min: 0, max: 1, step: 0.01, name: "K (noise-to-signal)" }],
+    describe: "Gonzalez–Woods Eq. (5-85) with H = 1 (additive noise, no blur). Larger K suppresses weak frequencies more. K = 0 leaves the image unchanged.",
+  },
+  kalman: {
+    label: "Kalman filter", eq: "5.80", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "q", min: 0.5, max: 40, step: 0.5, name: "q (process variance)" },
+      { key: "r", min: 1, max: 800, step: 1, name: "r (measurement variance)" },
+    ],
+    describe: "Not in Gonzalez–Woods as a 2-D filter. Same MMSE goal as Wiener (Eq. 5-80): a 1-D random-walk Kalman smoother on each row, then each column. Large r/q smooths more.",
+  },
 };
 
 // tools not implemented in imageOps.js: preview comes from the backend and
@@ -110,6 +141,7 @@ const PREVIEW_ON_OPEN = new Set([
   "gaussian_blur", "median",
   "arithmetic_mean", "geometric_mean", "harmonic_mean",
   "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
+  "band_reject", "band_pass", "wiener", "kalman",
 ]);
 
 function defaultParams(tool, img) {
@@ -135,6 +167,10 @@ function defaultParams(tool, img) {
     case "quantization_noise": return { bits: 4 };
     case "rayleigh_noise": return { a: 0, b: 400, zero_mean: false, seed: newSeed() };
     case "uniform_noise": return { a: -20, b: 20, seed: newSeed() };
+    case "band_reject":
+    case "band_pass": return { c0: 0.25, width: 0.12, kind: "butterworth", n: 2 };
+    case "wiener": return { k: 0.08 };
+    case "kalman": return { q: 4, r: 80 };
     default: return {};
   }
 }
@@ -147,6 +183,7 @@ function isNeutral(tool, p, img) {
   if (tool === "crop") return p.x === 0 && p.y === 0 && p.width === img.width && p.height === img.height;
   if (tool === "salt_pepper_noise") return p.p_pepper === 0 && p.p_salt === 0;
   if (tool === "quantization_noise") return p.bits === 8;
+  if (tool === "wiener") return p.k === 0;
   return false;
 }
 
@@ -217,6 +254,28 @@ function formulaTex(tool, params, img) {
       const std = (params.b - params.a) / Math.sqrt(12);
       return `\\begin{aligned} p(z)&=\\frac{1}{b-a},\\; ${params.a}\\le z\\le ${params.b}\\\\ g&=\\mathrm{clip}(f+z)\\\\ \\text{mean}&=${fmt((params.a + params.b) / 2, 1)},\\;\\text{std}=${fmt(std, 1)} \\end{aligned}`;
     }
+    case "band_reject":
+    case "band_pass": {
+      const c0 = fmt(params.c0, 2);
+      const w = fmt(params.width, 2);
+      const prefix = tool === "band_pass"
+        ? `H_{\\mathrm{BP}}&=1-H_{\\mathrm{BR}}\\\\ `
+        : "";
+      let hbr;
+      if (params.kind === "ideal") {
+        hbr = `H_{\\mathrm{BR}}&=\\begin{cases}0&C_0-W/2\\le D\\le C_0+W/2\\\\ 1&\\text{else}\\end{cases}`;
+      } else if (params.kind === "gaussian") {
+        hbr = `H_{\\mathrm{BR}}&=1-\\exp\\!\\Bigl(-\\tfrac12\\bigl[(D^{2}-C_0^{2})/(DW)\\bigr]^{2}\\Bigr)`;
+      } else {
+        hbr = `H_{\\mathrm{BR}}&=\\bigl(1+[DW/(D^{2}-C_0^{2})]^{2n}\\bigr)^{-1}`;
+      }
+      const extra = params.kind === "butterworth" ? `,\\; n=${params.n}` : "";
+      return `\\begin{aligned} ${prefix}${hbr}\\\\ C_0&=${c0}\\,D_{\\max},\\; W=${w}\\,D_{\\max}${extra} \\end{aligned}`;
+    }
+    case "wiener":
+      return `\\begin{aligned} \\hat{F}&=\\frac{|G|^{2}}{|G|^{2}+K\\mu}\\,G\\\\ K&=${fmt(params.k, 2)},\\; \\mu=\\mathrm{mean}|G|^{2},\\; H=1 \\end{aligned}`;
+    case "kalman":
+      return `\\begin{aligned} x_i&=x_{i-1}+w,\\; z_i=x_i+v\\\\ \\mathrm{Var}(w)&=q=${fmt(params.q, 1)},\\; \\mathrm{Var}(v)=r=${params.r} \\end{aligned}`;
     default:
       return null;
   }
@@ -388,6 +447,10 @@ function opLabel(op) {
     case "quantization_noise": return `Quantization noise B = ${p.bits} (${2 ** p.bits} levels)`;
     case "rayleigh_noise": return `Rayleigh noise a = ${p.a}, b = ${p.b}${p.zero_mean ? ", zero-mean" : ""}`;
     case "uniform_noise": return `Uniform noise [${p.a}, ${p.b}]`;
+    case "band_reject": return `Band-reject filter (${p.kind}) C₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
+    case "band_pass": return `Band-pass filter (${p.kind}) C₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
+    case "wiener": return `Wiener filter K = ${fmt(p.k, 2)}`;
+    case "kalman": return `Kalman filter q = ${fmt(p.q, 1)}, r = ${p.r}`;
     default: return op.type;
   }
 }
@@ -472,7 +535,18 @@ function ToolControls({ tool, params, setParams, img }) {
 
   return (
     <>
+      {(tool === "band_reject" || tool === "band_pass") && (
+        <label className="select inline">
+          <span>Transfer function (Table 4.7)</span>
+          <select value={params.kind} onChange={(e) => setParams({ ...params, kind: e.target.value })}>
+            <option value="ideal">Ideal</option>
+            <option value="butterworth">Butterworth</option>
+            <option value="gaussian">Gaussian</option>
+          </select>
+        </label>
+      )}
       {t.sliders.map((s) => {
+        if (s.key === "n" && params.kind !== "butterworth") return null;
         // with zero_mean on, the mean a + √(πb/4) is subtracted, so a has
         // no effect at all — disable the slider and say why
         const disabled = tool === "rayleigh_noise" && s.key === "a" && params.zero_mean;
