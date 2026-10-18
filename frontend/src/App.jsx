@@ -99,20 +99,62 @@ const TOOLS = {
 const CATEGORIES = [
   {
     id: "basic", label: "Basic tools",
-    describe: "Crop, resize, grayscale, brightness, contrast and blur.",
     tools: ["crop", "resize", "grayscale", "brightness", "contrast", "gaussian_blur"],
   },
   {
     id: "noise", label: "Noise",
-    describe: "Degrade the image with a noise model to test the filters on.",
     tools: ["salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise"],
   },
   {
     id: "filters", label: "Filters",
-    describe: "Remove noise with mean and median filters.",
     tools: ["arithmetic_mean", "geometric_mean", "harmonic_mean", "median"],
   },
 ];
+
+// 20 x 20 line icons drawn with currentColor
+const svgProps = {
+  width: 20, height: 20, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor",
+  strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true,
+};
+const ICONS = {
+  // three sliders
+  basic: (
+    <svg {...svgProps}>
+      <path d="M3 5h14M3 10h14M3 15h14" />
+      <circle cx="7" cy="5" r="1.8" fill="var(--panel)" />
+      <circle cx="13" cy="10" r="1.8" fill="var(--panel)" />
+      <circle cx="9" cy="15" r="1.8" fill="var(--panel)" />
+    </svg>
+  ),
+  // scattered pixels
+  noise: (
+    <svg {...svgProps}>
+      <rect x="3" y="3" width="14" height="14" rx="2.5" />
+      <path d="M7 7h.01M12 6.5h.01M9.5 10h.01M6.5 13h.01M13 13.5h.01M14 9.5h.01" strokeWidth="2.4" />
+    </svg>
+  ),
+  // funnel
+  filters: (
+    <svg {...svgProps}>
+      <path d="M3.5 4h13l-5 6.2V16l-3-1.5v-4.3z" />
+    </svg>
+  ),
+  menu: (
+    <svg {...svgProps}>
+      <path d="M3.5 5.5h13M3.5 10h13M3.5 14.5h13" />
+    </svg>
+  ),
+  back: (
+    <svg {...svgProps}>
+      <path d="M16 10H4.5M9 5l-5 5 5 5" />
+    </svg>
+  ),
+  chevron: (
+    <svg {...svgProps} width={16} height={16}>
+      <path d="M8 5l5 5-5 5" />
+    </svg>
+  ),
+};
 
 // tools not implemented in imageOps.js: preview comes from the backend and
 // the tool is disabled while the backend is offline
@@ -534,6 +576,9 @@ export default function App() {
   const [ops, setOps] = useState([]);
   const [redo, setRedo] = useState([]);
   const [category, setCategory] = useState(null);
+  // direction of the last move in the tools panel, for the slide animation
+  const [navDir, setNavDir] = useState("");
+  const [toolsOpen, setToolsOpen] = useState(true);
   const [tool, setTool] = useState(null);
   const [params, setParams] = useState({});
   const [preview, setPreview] = useState(null);
@@ -672,11 +717,13 @@ export default function App() {
   }
 
   function openCategory(id) {
+    setNavDir("forward");
     setCategory(id);
     closeTool();
   }
 
   function backToCategories() {
+    setNavDir("back");
     setCategory(null);
     closeTool();
   }
@@ -820,131 +867,141 @@ export default function App() {
           </div>
         </main>
       ) : (
-        <main className="work">
-          <aside className="tools panel" aria-label="Tools">
+        <main className={"work" + (toolsOpen ? "" : " tools-closed")}>
+          <aside className={"tools panel" + (toolsOpen ? "" : " closed")} aria-label="Tools">
             <div className="tools-head">
-              <h3>{cat ? cat.label : "Tools"}</h3>
+              <button type="button" className="icon-btn" onClick={() => setToolsOpen((o) => !o)}
+                aria-expanded={toolsOpen} aria-controls="tools-body"
+                aria-label={toolsOpen ? "Hide tools" : "Show tools"} title={toolsOpen ? "Hide tools" : "Show tools"}>
+                {ICONS.menu}
+              </button>
+              <h3 className="tools-title">{cat ? cat.label : "Tools"}</h3>
               {cat && (
-                <button type="button" className="back" onClick={backToCategories}
+                <button type="button" className="icon-btn back" onClick={backToCategories}
                   aria-label="Back to categories" title="Back to categories">
-                  ←
+                  {ICONS.back}
                 </button>
               )}
             </div>
+            <span className="tools-rail" aria-hidden="true">Tools</span>
 
-            {!cat ? (
-              <div className="category-list">
-                {CATEGORIES.map((c) => (
-                  <button key={c.id} type="button" className="category" onClick={() => openCategory(c.id)}>
-                    <span className="category-text">
-                      <strong>{c.label}</strong>
-                      <span>{c.describe}</span>
-                    </span>
-                    <span className="category-count">{c.tools.length}</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <>
-                <div className="tool-list" role="tablist" aria-label={cat.label}>
-                  {cat.tools.map((k) => {
-                    const v = TOOLS[k];
-                    const offline = v.backendOnly && backend !== "server";
-                    return (
-                      <button key={k} role="tab" aria-selected={tool === k}
-                        disabled={offline}
-                        title={offline ? "Needs backend" : undefined}
-                        className={"tool" + (tool === k ? " on" : "")} onClick={() => selectTool(k)}>
-                        {v.label}
-                        {offline && <span className="note"> (needs backend)</span>}
+            <div className="tools-body" id="tools-body" inert={toolsOpen ? undefined : ""}>
+              <div key={cat ? cat.id : "root"} className={"tools-view " + navDir}>
+                {!cat ? (
+                  <div className="category-list">
+                    {CATEGORIES.map((c) => (
+                      <button key={c.id} type="button" className="category" onClick={() => openCategory(c.id)}>
+                        <span className="category-icon">{ICONS[c.id]}</span>
+                        <span className="category-label">{c.label}</span>
+                        <span className="category-chevron">{ICONS.chevron}</span>
                       </button>
-                    );
-                  })}
-                </div>
-
-                {!t ? (
-                  <p className="hint">Choose a tool to see its formula and controls.</p>
+                    ))}
+                  </div>
                 ) : (
                   <>
-                    <div className="formula">
-                      <Formula tool={tool} params={params} img={committed} />
-                      <span className="eqno">({t.eq})</span>
+                    <div className="tool-list" role="tablist" aria-label={cat.label}>
+                      {cat.tools.map((k) => {
+                        const v = TOOLS[k];
+                        const offline = v.backendOnly && backend !== "server";
+                        return (
+                          <button key={k} role="tab" aria-selected={tool === k}
+                            disabled={offline}
+                            title={offline ? "Needs backend" : undefined}
+                            className={"tool" + (tool === k ? " on" : "")} onClick={() => selectTool(k)}>
+                            {v.label}
+                            {offline && <span className="note"> (needs backend)</span>}
+                          </button>
+                        );
+                      })}
                     </div>
-                    <p className="hint">{t.describe}</p>
 
-                    <ToolControls tool={tool} params={params} setParams={editParams} img={committed} />
+                    {!t ? (
+                      <p className="hint">Choose a tool to see its formula and controls.</p>
+                    ) : (
+                      <>
+                        <div className="formula">
+                          <Formula tool={tool} params={params} img={committed} />
+                          <span className="eqno">({t.eq})</span>
+                        </div>
+                        <p className="hint">{t.describe}</p>
 
-                    <div className="row">
-                      <button className="primary" onClick={apply} disabled={neutral || busy}>Apply {t.label.toLowerCase()}</button>
-                      {tool !== "grayscale" && (
-                        <button onClick={() => { setParams(defaultParams(tool, committed)); setDirty(false); }} disabled={busy}>Cancel</button>
-                      )}
-                    </div>
+                        <ToolControls tool={tool} params={params} setParams={editParams} img={committed} />
+
+                        <div className="row">
+                          <button className="primary" onClick={apply} disabled={neutral || busy}>Apply {t.label.toLowerCase()}</button>
+                          {tool !== "grayscale" && (
+                            <button onClick={() => { setParams(defaultParams(tool, committed)); setDirty(false); }} disabled={busy}>Cancel</button>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
-              </>
-            )}
+              </div>
 
-            <h3 className="gap">History</h3>
-            {ops.length === 0 ? (
-              <p className="hint">No operations yet. Applied steps appear here in order.</p>
-            ) : (
-              <ol className="history">{ops.map((op, i) => <li key={i}>{opLabel(op)}</li>)}</ol>
-            )}
-            <div className="row">
-              <button onClick={undo} disabled={!ops.length || busy}>Undo</button>
-              <button onClick={redoOp} disabled={!redo.length || busy}>Redo</button>
-              <button onClick={reset} disabled={!ops.length || busy}>Reset</button>
-            </div>
+              <h3 className="gap">History</h3>
+              {ops.length === 0 ? (
+                <p className="hint">No operations yet. Applied steps appear here in order.</p>
+              ) : (
+                <ol className="history">{ops.map((op, i) => <li key={i}>{opLabel(op)}</li>)}</ol>
+              )}
+              <div className="row">
+                <button onClick={undo} disabled={!ops.length || busy}>Undo</button>
+                <button onClick={redoOp} disabled={!redo.length || busy}>Redo</button>
+                <button onClick={reset} disabled={!ops.length || busy}>Reset</button>
+              </div>
 
-            <h3 className="gap">Image</h3>
-            <div className="row">
-              <button onClick={() => fileRef.current.click()}>Load another image</button>
+              <h3 className="gap">Image</h3>
+              <div className="row">
+                <button onClick={() => fileRef.current.click()}>Load another image</button>
+              </div>
+              {error && <p className="error" role="alert">{error}</p>}
             </div>
-            {error && <p className="error" role="alert">{error}</p>}
           </aside>
 
-          <section className="canvases">
-            {notice && <p className="notice">{notice}</p>}
-            <div className="pair">
-              <ImageCanvas image={original} label="Original" note={`${original.width}×${original.height}`} />
-              <ImageCanvas
-                image={shown}
-                label="Processed"
-                note={processedNote}
-                overlay={tool === "crop" && committed && (
-                  <CropOverlay img={committed} rect={params} onChange={editParams} />
-                )}
-                footer={exportFooter}
-              />
-            </div>
-            {tool === "crop" && <p className="hint">Drag on the processed image to select the area to keep.</p>}
-          </section>
-
-          <div className="bottom">
-            <Histogram image={shown} />
-            <section className="panel log">
-              <h3>Requests to backend</h3>
-              <p className="hint">
-                {backend === "server"
-                  ? "Live requests to the FastAPI backend. Previews stay local until you apply."
-                  : "Simulated requests: what the frontend will send once the backend is running."}
-              </p>
-              <ul>
-                {log.map((e) => (
-                  <li key={e.id}>
-                    <div className="req">
-                      <span className="method">{e.method}</span>
-                      <span className="path">{e.path}</span>
-                      <span className={"code" + (e.status >= 400 ? " bad" : "")}>{e.status}</span>
-                      <span className="ms">{e.ms} ms</span>
-                    </div>
-                    {e.body && <code>{e.body}</code>}
-                    <code className="res">{e.result}</code>
-                  </li>
-                ))}
-              </ul>
+          <div className="stage">
+            <section className="canvases">
+              {notice && <p className="notice">{notice}</p>}
+              <div className="pair">
+                <ImageCanvas image={original} label="Original" note={`${original.width}×${original.height}`} />
+                <ImageCanvas
+                  image={shown}
+                  label="Processed"
+                  note={processedNote}
+                  overlay={tool === "crop" && committed && (
+                    <CropOverlay img={committed} rect={params} onChange={editParams} />
+                  )}
+                  footer={exportFooter}
+                />
+              </div>
+              {tool === "crop" && <p className="hint">Drag on the processed image to select the area to keep.</p>}
             </section>
+
+            <div className="bottom">
+              <Histogram image={shown} />
+              <section className="panel log">
+                <h3>Requests to backend</h3>
+                <p className="hint">
+                  {backend === "server"
+                    ? "Live requests to the FastAPI backend. Previews stay local until you apply."
+                    : "Simulated requests: what the frontend will send once the backend is running."}
+                </p>
+                <ul>
+                  {log.map((e) => (
+                    <li key={e.id}>
+                      <div className="req">
+                        <span className="method">{e.method}</span>
+                        <span className="path">{e.path}</span>
+                        <span className={"code" + (e.status >= 400 ? " bad" : "")}>{e.status}</span>
+                        <span className="ms">{e.ms} ms</span>
+                      </div>
+                      {e.body && <code>{e.body}</code>}
+                      <code className="res">{e.result}</code>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </div>
           </div>
         </main>
       )}

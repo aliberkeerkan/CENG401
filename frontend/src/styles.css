@@ -130,46 +130,92 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .drop .row { justify-content: center; margin-top: 1.4rem; }
 .drop .error { margin-left: auto; margin-right: auto; }
 
-/* workspace */
-.work { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1rem; align-items: start; }
+/* workspace: the tools panel on the left, the images and the analysis
+   on the right (in .stage, so the sticky panel never covers them) */
+.work {
+  --ease-out: cubic-bezier(0.22, 0.8, 0.24, 1);
+  display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1rem; align-items: start;
+  transition: grid-template-columns 0.36s var(--ease-out);
+}
+.work.tools-closed { grid-template-columns: 56px minmax(0, 1fr); }
+.stage { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; min-width: 0; }
+.bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem; }
 
-/* The tools panel stays on screen and scrolls on its own, so a long tool
-   does not move the page and the images stay in view. */
+/* The tools panel stays in view and scrolls on its own (scrollbar hidden,
+   wheel and touch still scroll it), so the page and the images stay put. */
 .tools {
   position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1rem);
   max-height: calc(100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
-  overflow-y: auto; overscroll-behavior: contain; padding-top: 0;
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  scrollbar-width: none; padding-top: 0;
 }
+.tools::-webkit-scrollbar { display: none; }
 .tools-head {
-  position: sticky; top: 0; z-index: 1; background: var(--panel);
-  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
-  padding: 1rem 0 0.6rem; margin-bottom: 0.2rem;
+  position: sticky; top: 0; z-index: 2; background: var(--panel);
+  display: flex; align-items: center; gap: 0.55rem;
+  padding: 0.85rem 0 0.7rem; margin-bottom: 0.25rem;
 }
-.tools-head h3 { margin: 0; }
-.back {
-  flex: 0 0 auto; width: 2rem; height: 2rem; padding: 0; border-radius: 999px;
-  display: grid; place-items: center; font-size: 1.05rem; line-height: 1;
+.tools-title {
+  flex: 1; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: opacity 0.2s ease;
+}
+.icon-btn {
+  flex: 0 0 auto; width: 2.1rem; height: 2.1rem; padding: 0; border-radius: 8px;
+  display: grid; place-items: center; color: var(--muted); background: transparent; border-color: transparent;
+}
+.icon-btn:hover:not(:disabled) { color: var(--ink); background: var(--paper); border-color: var(--line); }
+.icon-btn.back { animation: fade-in 0.25s ease; }
+.tools-rail {
+  display: none; margin: 0.6rem auto 0; writing-mode: vertical-rl; transform: rotate(180deg);
+  font-size: 0.78rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
 }
 
-.category-list { display: grid; gap: 0.5rem; }
+/* the panel body has a fixed width, so it slides instead of reflowing
+   while the column opens and closes */
+.tools-body {
+  width: calc(300px - 2rem - 2px);
+  transition: opacity 0.28s ease 0.08s, transform 0.36s var(--ease-out), visibility 0s;
+}
+.tools.closed { padding-inline: 0.45rem; overflow: hidden; }
+.tools.closed .tools-head { flex-direction: column; padding-bottom: 0; margin: 0; }
+.tools.closed .tools-title, .tools.closed .back { display: none; }
+.tools.closed .tools-rail { display: block; }
+.tools.closed .tools-body {
+  position: absolute; top: 3.4rem; left: 1rem;
+  opacity: 0; transform: translateX(-28px); visibility: hidden; pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.3s var(--ease-out), visibility 0s 0.3s;
+}
+
+/* moving between the category list and a category slides like a drawer */
+.tools-view.forward { animation: slide-from-right 0.32s var(--ease-out); }
+.tools-view.back { animation: slide-from-left 0.32s var(--ease-out); }
+@keyframes slide-from-right { from { opacity: 0; transform: translateX(32px); } to { opacity: 1; transform: none; } }
+@keyframes slide-from-left { from { opacity: 0; transform: translateX(-32px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.category-list { display: grid; gap: 0.4rem; }
 .category {
-  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
-  text-align: left; padding: 0.7rem 0.8rem;
+  display: flex; align-items: center; gap: 0.75rem; width: 100%;
+  text-align: left; padding: 0.6rem 0.65rem; border-radius: 10px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.category:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
-.category-text { display: grid; gap: 0.15rem; }
-.category-text strong { font-weight: 600; }
-.category-text span { color: var(--muted); font-size: 0.82rem; }
-.category-count {
-  flex: 0 0 auto; min-width: 1.6rem; padding: 0.05rem 0.45rem; border-radius: 999px;
-  background: var(--paper); color: var(--muted); font-size: 0.78rem; text-align: center;
-  font-variant-numeric: tabular-nums;
+.category:hover:not(:disabled) { background: var(--paper); border-color: var(--line); }
+.category-icon {
+  flex: 0 0 auto; width: 2.25rem; height: 2.25rem; border-radius: 8px;
+  display: grid; place-items: center; background: var(--accent-soft); color: var(--accent);
 }
-.bottom { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1rem; }
+.category-label { flex: 1; font-weight: 600; }
+.category-chevron { display: grid; color: var(--muted); transition: transform 0.18s var(--ease-out), color 0.15s ease; }
+.category:hover .category-chevron { transform: translateX(3px); color: var(--ink); }
 
 .tool-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem; }
 .tool { text-align: left; padding: 0.45rem 0.6rem; font-size: 0.86rem; }
 .tool.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  .work, .tools-body, .tools.closed .tools-body, .category, .category-chevron { transition: none; }
+  .tools-view.forward, .tools-view.back, .icon-btn.back { animation: none; }
+}
 
 /* the formula strip: the equation from the plan, with live values */
 .formula { margin-top: 1rem; padding: 0.85rem 1rem; border-left: 3px solid var(--accent);
@@ -202,7 +248,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .history { margin: 0; padding-left: 1.3rem; font-size: 0.9rem; }
 .history li { padding: 0.15rem 0; }
 
-.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
 .frame { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .frame figcaption { display: flex; justify-content: space-between; padding: 0.55rem 0.8rem; font-size: 0.88rem; font-weight: 500; border-bottom: 1px solid var(--line); }
 .frame .note { color: var(--muted); font-weight: 400; }
@@ -241,13 +287,18 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .log code.res { color: var(--ink); }
 
 @media (max-width: 900px) {
-  .work { grid-template-columns: 1fr; }
+  .work, .work.tools-closed { grid-template-columns: minmax(0, 1fr); }
   /* stacked layout: the panel no longer sticks, but keeps its own scroll
-     so the images below are reached quickly */
+     so the images below are reached quickly; closed, only its header shows */
   .tools { position: static; max-height: 60vh; }
-  .bottom { grid-template-columns: 1fr; }
+  .tools-body { width: auto; }
+  .tools.closed { padding-inline: 1rem; }
+  .tools.closed .tools-head { flex-direction: row; padding-bottom: 0.85rem; }
+  .tools.closed .tools-title { display: block; }
+  .tools.closed .tools-rail { display: none; }
+  .bottom { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 600px) {
-  .pair { grid-template-columns: 1fr; }
+  .pair { grid-template-columns: minmax(0, 1fr); }
   .app { padding: 0.8rem; }
 }
