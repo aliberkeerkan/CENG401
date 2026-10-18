@@ -214,6 +214,52 @@ def test_mean_filters_handle_zero_pixels():
     assert filters.harmonic_mean(x, 3)[3, 3, 0] < 1
 
 
+# ---------- order-statistic filters (Section 5.4.2) ----------
+
+
+@pytest.mark.parametrize("size", [3, 5])
+def test_minimum_eq31(size):
+    expected = _brute_force(RAND, size, lambda w: w.min())
+    assert np.array_equal(filters.minimum(RAND, size), expected)
+
+
+@pytest.mark.parametrize("size", [3, 5])
+def test_maximum_eq32(size):
+    expected = _brute_force(RAND, size, lambda w: w.max())
+    assert np.array_equal(filters.maximum(RAND, size), expected)
+
+
+@pytest.mark.parametrize("size", [3, 5])
+def test_midpoint_eq34(size):
+    expected = _brute_force(RAND, size, lambda w: (w.max() + w.min()) / 2)
+    assert np.array_equal(filters.midpoint(RAND, size), expected)
+
+
+def test_order_statistic_filters_suppress_isolated_impulses():
+    # minimum removes an isolated bright (salt) impulse
+    salt = np.full((7, 7, 3), 100.0)
+    salt[3, 3] = 255
+    assert filters.minimum(salt, 3)[3, 3, 0] == 100
+    # maximum removes an isolated dark (pepper) impulse
+    pepper = np.full((7, 7, 3), 100.0)
+    pepper[3, 3] = 0
+    assert filters.maximum(pepper, 3)[3, 3, 0] == 100
+    # midpoint of an isolated impulse is the average of impulse and background
+    assert filters.midpoint(salt, 3)[3, 3, 0] == 178   # (255 + 100) / 2 = 177.5
+    assert filters.midpoint(pepper, 3)[3, 3, 0] == 50  # (0 + 100) / 2
+
+
+def test_order_statistic_filters_keep_constant_image_and_order():
+    x = np.full((6, 6, 3), 77.0)
+    for fn in (filters.minimum, filters.maximum, filters.midpoint):
+        assert np.array_equal(fn(x, 3), x)
+    # min <= midpoint <= max for any data
+    lo = filters.minimum(RAND, 3)
+    mid = filters.midpoint(RAND, 3)
+    hi = filters.maximum(RAND, 3)
+    assert np.all(lo <= mid) and np.all(mid <= hi)
+
+
 # ---------- frequency-domain filters (G&W 4.10 and 5.8) ----------
 from app.imaging.ops import frequency  # noqa: E402
 

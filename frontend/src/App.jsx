@@ -63,6 +63,21 @@ const TOOLS = {
     sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
     describe: "Cleans salt noise well. With pepper noise the window is pulled towards zero and the image darkens.",
   },
+  minimum: {
+    label: "Min filter", eq: "31", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Takes the darkest pixel of each window. Suppresses isolated bright (salt) impulses; the image darkens overall.",
+  },
+  maximum: {
+    label: "Max filter", eq: "32", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Takes the brightest pixel of each window. Suppresses isolated dark (pepper) impulses; the image brightens overall.",
+  },
+  midpoint: {
+    label: "Midpoint filter", eq: "34", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Averages the darkest and brightest pixel of each window. Best suited to bounded random noise such as uniform noise, not salt & pepper.",
+  },
   salt_pepper_noise: {
     label: "Salt & pepper", eq: "18", heavy: true, backendOnly: true,
     sliders: [
@@ -140,6 +155,7 @@ const newSeed = () => Math.floor(Math.random() * 2 ** 32);
 const PREVIEW_ON_OPEN = new Set([
   "gaussian_blur", "median",
   "arithmetic_mean", "geometric_mean", "harmonic_mean",
+  "minimum", "maximum", "midpoint",
   "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
   "band_reject", "band_pass", "wiener", "kalman",
 ]);
@@ -160,7 +176,10 @@ function defaultParams(tool, img) {
     case "median": return { size: 3 };
     case "arithmetic_mean":
     case "geometric_mean":
-    case "harmonic_mean": return { size: 3 };
+    case "harmonic_mean":
+    case "minimum":
+    case "maximum":
+    case "midpoint": return { size: 3 };
     // every noise step gets its own random seed when the tool is selected;
     // the seed stays fixed while the user adjusts the other parameters
     case "salt_pepper_noise": return { p_pepper: 0.05, p_salt: 0.05, seed: newSeed() };
@@ -236,6 +255,12 @@ function formulaTex(tool, params, img) {
       return `\\begin{aligned} \\hat{f}(x,y)&=\\exp\\!\\Bigl(\\frac{1}{mn}\\sum_{(s,t)\\in S_{xy}}\\ln\\bigl(g(s,t)+\\varepsilon\\bigr)\\Bigr)\\\\ S_{xy}&=${win} \\end{aligned}`;
     case "harmonic_mean":
       return `\\begin{aligned} \\hat{f}(x,y)&=\\frac{mn}{\\sum_{(s,t)\\in S_{xy}} 1/\\bigl(g(s,t)+\\varepsilon\\bigr)}\\\\ S_{xy}&=${win} \\end{aligned}`;
+    case "minimum":
+      return `\\hat{f}(x,y)=\\min_{(s,t)\\in S_{xy}} g(s,t),\\; S_{xy}=${win}`;
+    case "maximum":
+      return `\\hat{f}(x,y)=\\max_{(s,t)\\in S_{xy}} g(s,t),\\; S_{xy}=${win}`;
+    case "midpoint":
+      return `\\hat{f}(x,y)=\\tfrac{1}{2}\\Bigl[\\max_{(s,t)\\in S_{xy}} g(s,t)+\\min_{(s,t)\\in S_{xy}} g(s,t)\\Bigr],\\; S_{xy}=${win}`;
     case "salt_pepper_noise":
       return `\\begin{aligned} p(z)&=\\begin{cases} P_p=${fmt(params.p_pepper)} & z=0 \\\\ P_s=${fmt(params.p_salt)} & z=255 \\\\ 1-P_p-P_s & \\text{else}\\end{cases}\\\\ g&=\\begin{cases} 0 & u<P_p \\\\ 255 & P_p\\le u<P_p+P_s \\\\ f & \\text{else}\\end{cases}\\end{aligned}`;
     case "quantization_noise": {
@@ -443,6 +468,9 @@ function opLabel(op) {
     case "arithmetic_mean": return `Mean filter ${p.size}×${p.size}`;
     case "geometric_mean": return `Geometric mean ${p.size}×${p.size}`;
     case "harmonic_mean": return `Harmonic mean ${p.size}×${p.size}`;
+    case "minimum": return `Min filter ${p.size}×${p.size}`;
+    case "maximum": return `Max filter ${p.size}×${p.size}`;
+    case "midpoint": return `Midpoint filter ${p.size}×${p.size}`;
     case "salt_pepper_noise": return `Salt & pepper Pₚ = ${fmt(p.p_pepper, 2)}, Pₛ = ${fmt(p.p_salt, 2)}`;
     case "quantization_noise": return `Quantization noise B = ${p.bits} (${2 ** p.bits} levels)`;
     case "rayleigh_noise": return `Rayleigh noise a = ${p.a}, b = ${p.b}${p.zero_mean ? ", zero-mean" : ""}`;

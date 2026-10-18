@@ -161,6 +161,34 @@ NOISE_AND_MEAN_OPS = [
 ]
 
 
+ORDER_STATISTIC_OPS = [
+    {"type": "minimum", "params": {"size": 3}},
+    {"type": "maximum", "params": {"size": 5}},
+    {"type": "midpoint", "params": {"size": 3}},
+]
+
+
+def test_order_statistic_filters_through_api():
+    arr = np.random.default_rng(8).integers(0, 256, (30, 40, 3), dtype=np.uint8)
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    for op in ORDER_STATISTIC_OPS:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 200, op["type"]
+        assert decode(r).shape == (30, 40, 3)
+
+
+def test_order_statistic_parameters_are_validated():
+    image_id = upload(png_bytes(np.zeros((8, 8, 3), dtype=np.uint8))).json()["image_id"]
+    bad = [
+        {"type": "minimum", "params": {"size": 4}},   # even window
+        {"type": "maximum", "params": {"size": 1}},   # below ge=3
+        {"type": "midpoint", "params": {"size": 17}},  # above le=15
+    ]
+    for op in bad:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 422, op
+
+
 def test_noise_and_mean_filters_through_api():
     arr = np.random.default_rng(6).integers(0, 256, (30, 40, 3), dtype=np.uint8)
     image_id = upload(png_bytes(arr)).json()["image_id"]
