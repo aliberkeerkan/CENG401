@@ -151,6 +151,21 @@ class HarmonicMeanOp(BaseModel):
     params: WindowParams
 
 
+class MinimumOp(BaseModel):
+    type: Literal["minimum"]
+    params: WindowParams
+
+
+class MaximumOp(BaseModel):
+    type: Literal["maximum"]
+    params: WindowParams
+
+
+class MidpointOp(BaseModel):
+    type: Literal["midpoint"]
+    params: WindowParams
+
+
 class SaltPepperNoiseOp(BaseModel):
     type: Literal["salt_pepper_noise"]
     params: SaltPepperParams
@@ -210,6 +225,7 @@ Operation = Annotated[
     Union[
         CropOp, ResizeOp, GrayscaleOp, BrightnessOp, ContrastOp,
         GaussianBlurOp, MedianOp, ArithmeticMeanOp, GeometricMeanOp, HarmonicMeanOp,
+        MinimumOp, MaximumOp, MidpointOp,
         SaltPepperNoiseOp, QuantizationNoiseOp, RayleighNoiseOp, UniformNoiseOp,
         BandRejectOp, BandPassOp, WienerOp, KalmanOp,
     ],

@@ -7,7 +7,9 @@ Border handling: reflection without repeating the edge pixel
 import math
 
 import numpy as np
+from scipy.ndimage import maximum_filter as _scipy_max
 from scipy.ndimage import median_filter as _scipy_median
+from scipy.ndimage import minimum_filter as _scipy_min
 
 
 def gaussian_kernel(sigma: float) -> np.ndarray:
@@ -110,3 +112,36 @@ def median(rgb: np.ndarray, size: int) -> np.ndarray:
     for c in range(rgb.shape[2]):
         out[..., c] = _scipy_median(rgb[..., c], size=size, mode="mirror")
     return out
+
+
+def minimum(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Eq. (31): f^_min(x, y) = min of g over S_xy, each channel separately.
+
+    Suppresses isolated bright (salt) impulses.
+    """
+    out = np.empty_like(rgb)
+    for c in range(rgb.shape[2]):
+        out[..., c] = _scipy_min(rgb[..., c], size=size, mode="mirror")
+    return out
+
+
+def maximum(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Eq. (32): f^_max(x, y) = max of g over S_xy, each channel separately.
+
+    Suppresses isolated dark (pepper) impulses.
+    """
+    out = np.empty_like(rgb)
+    for c in range(rgb.shape[2]):
+        out[..., c] = _scipy_max(rgb[..., c], size=size, mode="mirror")
+    return out
+
+
+def midpoint(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Eq. (34): f^_mid(x, y) = (max + min) / 2 over S_xy.
+
+    Most naturally associated with bounded random noise such as uniform
+    noise; not a generally optimal salt-and-pepper filter.
+    """
+    lo = minimum(rgb, size)
+    hi = maximum(rgb, size)
+    return np.clip(np.floor((lo + hi) / 2 + 0.5), 0, 255)
