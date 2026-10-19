@@ -46,7 +46,7 @@ pytest
 |-------|--------------------------------|
 | Basic | `crop` {x, y, width, height}, `resize` {width, height, method}, `grayscale`, `brightness` {beta}, `contrast` {r_min, r_max: 0–255, r_min < r_max} |
 | Filters | `gaussian_blur` {sigma}, `median`, `arithmetic_mean`, `geometric_mean`, `harmonic_mean` {size: odd, 3–15} |
-| Frequency | `band_reject` / `band_pass` {c0, width, kind, n} (G&W Table 4.7, Eq. 4-148), `wiener` {k} (Eq. 5-85), `kalman` {q, r} |
+| Frequency | `band_reject` (40) / `band_pass` (41) {c0, width: fractions of D_max, kind: ideal \| butterworth \| gaussian, n}, `wiener` (44) {noise_std}, `kalman` {q, r}: 1-D Kalman smoother on rows, then columns |
 | Noise | `salt_pepper_noise` {p_pepper, p_salt, seed}, `quantization_noise` {bits: 1–8}, `rayleigh_noise` {a, b, zero_mean, seed}, `uniform_noise` {a, b, seed} |
 
 Limits are listed in `app/schemas.py` and on the `/docs` page.
@@ -74,7 +74,7 @@ app/
       basic.py       grayscale (6), brightness (8), contrast stretching (r_min, r_max)
       geometry.py    crop (4), resize: nearest / bilinear (5)
       filters.py     Gaussian blur (10), mean filters (27)-(29), median (33)
-      frequency.py   band-reject / band-pass (G&W 4.10), Wiener (5.85), Kalman
+      frequency.py   band-reject (40), band-pass (41), Wiener (44), Kalman smoother
       noise.py       salt-and-pepper (18), quantization (22), Rayleigh (24), uniform (25)
 tests/               unit and API tests
 ```

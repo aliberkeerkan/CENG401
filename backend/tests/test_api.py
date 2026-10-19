@@ -145,7 +145,7 @@ def test_crop_and_resize_transform_alpha_too():
 FREQ_OPS = [
     {"type": "band_reject", "params": {"c0": 0.25, "width": 0.10, "kind": "butterworth", "n": 2}},
     {"type": "band_pass", "params": {"c0": 0.30, "width": 0.12, "kind": "gaussian", "n": 2}},
-    {"type": "wiener", "params": {"k": 0.1}},
+    {"type": "wiener", "params": {"noise_std": 15}},
     {"type": "kalman", "params": {"q": 4, "r": 80}},
 ]
 
@@ -228,7 +228,7 @@ def test_frequency_parameters_are_validated():
         {"type": "band_reject", "params": {"c0": 0, "width": 0.1}},
         {"type": "band_pass", "params": {"c0": 0.2, "width": 0, "kind": "ideal"}},
         {"type": "band_pass", "params": {"c0": 0.2, "width": 0.1, "kind": "box"}},
-        {"type": "wiener", "params": {"k": -0.1}},
+        {"type": "wiener", "params": {"noise_std": -1}},
         {"type": "kalman", "params": {"q": 0, "r": 10}},
         {"type": "kalman", "params": {"q": 1, "r": 0}},
     ]

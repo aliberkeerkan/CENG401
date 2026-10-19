@@ -99,16 +99,20 @@ class UniformParams(BaseModel):
 
 
 class BandFilterParams(BaseModel):
-    """Gonzalez & Woods Table 4.7. c0 and width are fractions of D_max."""
+    """Eqs. (40)-(41) and Table 4.7. c0 and width are fractions of D_max."""
 
-    c0: float = Field(gt=0, le=1, description="Band centre C0 / D_max")
-    width: float = Field(gt=0, le=1, description="Band width W / D_max")
+    c0: float = Field(gt=0, le=1, description="Band centre D_0 / D_max, Eq. (40)")
+    width: float = Field(gt=0, le=1, description="Band width W / D_max, Eq. (40)")
     kind: Literal["ideal", "butterworth", "gaussian"] = "butterworth"
     n: int = Field(default=2, ge=1, le=8, description="Butterworth order n")
 
 
 class WienerParams(BaseModel):
-    k: float = Field(ge=0, le=5, description="NSR constant K, Eq. (5-85)")
+    noise_std: float = Field(
+        ge=0, le=128,
+        description="Standard deviation sigma_eta of the additive noise; S_eta = MN sigma_eta^2, Eq. (44)",
+    )
+
 
 
 class KalmanParams(BaseModel):

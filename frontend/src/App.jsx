@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import {
@@ -108,35 +108,35 @@ const TOOLS = {
     describe: "Adds noise drawn uniformly from [a, b]. A range symmetric around 0 adds no brightness shift.",
   },
   band_reject: {
-    label: "Band-reject filter", eq: "4.10", heavy: true, backendOnly: true,
+    label: "Band-reject filter", eq: "40", heavy: true, backendOnly: true,
     sliders: [
-      { key: "c0", min: 0.04, max: 0.80, step: 0.01, name: "C₀ (band centre / Dmax)" },
+      { key: "c0", min: 0.04, max: 0.80, step: 0.01, name: "D₀ (band centre / Dmax)" },
       { key: "width", min: 0.02, max: 0.50, step: 0.01, name: "W (band width / Dmax)" },
       { key: "n", min: 1, max: 8, step: 1, name: "n (Butterworth order)" },
     ],
-    describe: "Gonzalez–Woods Table 4.7. Removes a ring of frequencies around C₀. Ideal rings; Gaussian is the smoothest.",
+    describe: "Removes a ring of frequencies of radius D₀ and width W from the spectrum. Ideal has a hard edge and rings; Butterworth and Gaussian (Gonzalez–Woods Table 4.7) are smoother.",
   },
   band_pass: {
-    label: "Band-pass filter", eq: "4.148", heavy: true, backendOnly: true,
+    label: "Band-pass filter", eq: "41", heavy: true, backendOnly: true,
     sliders: [
-      { key: "c0", min: 0.04, max: 0.80, step: 0.01, name: "C₀ (band centre / Dmax)" },
+      { key: "c0", min: 0.04, max: 0.80, step: 0.01, name: "D₀ (band centre / Dmax)" },
       { key: "width", min: 0.02, max: 0.50, step: 0.01, name: "W (band width / Dmax)" },
       { key: "n", min: 1, max: 8, step: 1, name: "n (Butterworth order)" },
     ],
-    describe: "Eq. (4-148): H_BP = 1 − H_BR. Keeps only the ring around C₀, so the result looks like edges or periodic texture.",
+    describe: "Keeps only the ring that the band-reject filter removes, to show what it takes away, e.g. a periodic pattern. Shown around mid-gray (128 = 0), since the result has no mean.",
   },
   wiener: {
-    label: "Wiener filter", eq: "5.85", heavy: true, backendOnly: true,
-    sliders: [{ key: "k", min: 0, max: 1, step: 0.01, name: "K (noise-to-signal)" }],
-    describe: "Gonzalez–Woods Eq. (5-85) with H = 1 (additive noise, no blur). Larger K suppresses weak frequencies more. K = 0 leaves the image unchanged.",
+    label: "Wiener filter", eq: "44", heavy: true, backendOnly: true,
+    sliders: [{ key: "noise_std", min: 0, max: 60, step: 1, name: "σ_η (noise std)" }],
+    describe: "Keeps each frequency in proportion to how much of it is signal rather than noise. Set σ_η to the noise level; the uniform and Rayleigh tools show the std of the noise they add.",
   },
   kalman: {
-    label: "Kalman filter", eq: "5.80", heavy: true, backendOnly: true,
+    label: "Kalman filter", eq: "45–51", heavy: true, backendOnly: true,
     sliders: [
       { key: "q", min: 0.5, max: 40, step: 0.5, name: "q (process variance)" },
       { key: "r", min: 1, max: 800, step: 1, name: "r (measurement variance)" },
     ],
-    describe: "Not in Gonzalez–Woods as a 2-D filter. Same MMSE goal as Wiener (Eq. 5-80): a 1-D random-walk Kalman smoother on each row, then each column. Large r/q smooths more.",
+    describe: "Not a Gonzalez–Woods formula: a 1-D Kalman smoother. Every row, then every column, is a 1-D signal; R, G and B are processed separately. A larger r/q smooths more; a constant image is unchanged.",
   },
 };
 
@@ -153,7 +153,14 @@ const CATEGORIES = [
   },
   {
     id: "filters", label: "Filters",
-    tools: ["arithmetic_mean", "geometric_mean", "harmonic_mean", "median"],
+    tools: [
+      "arithmetic_mean", "geometric_mean", "harmonic_mean",
+      "median", "minimum", "maximum", "midpoint",
+    ],
+  },
+  {
+    id: "frequency", label: "Frequency domain",
+    tools: ["band_reject", "band_pass", "wiener", "kalman"],
   },
 ];
 
@@ -183,6 +190,12 @@ const ICONS = {
   filters: (
     <svg {...svgProps}>
       <path d="M3.5 4h13l-5 6.2V16l-3-1.5v-4.3z" />
+    </svg>
+  ),
+  // a sine wave
+  frequency: (
+    <svg {...svgProps}>
+      <path d="M2.5 10c1.6-5 3.4-5 5 0s3.4 5 5 0 3.4-5 5 0" />
     </svg>
   ),
   menu: (
@@ -250,7 +263,7 @@ function defaultParams(tool, img) {
     case "uniform_noise": return { a: -20, b: 20, seed: newSeed() };
     case "band_reject":
     case "band_pass": return { c0: 0.25, width: 0.12, kind: "butterworth", n: 2 };
-    case "wiener": return { k: 0.08 };
+    case "wiener": return { noise_std: 20 };
     case "kalman": return { q: 4, r: 80 };
     default: return {};
   }
@@ -264,7 +277,7 @@ function isNeutral(tool, p, img) {
   if (tool === "crop") return p.x === 0 && p.y === 0 && p.width === img.width && p.height === img.height;
   if (tool === "salt_pepper_noise") return p.p_pepper === 0 && p.p_salt === 0;
   if (tool === "quantization_noise") return p.bits === 8;
-  if (tool === "wiener") return p.k === 0;
+  if (tool === "wiener") return p.noise_std === 0;
   return false;
 }
 
@@ -278,11 +291,21 @@ const fmt = (v, d = 2) => Number(v).toFixed(d);
 const clampInt = (v, lo, hi) => Math.min(Math.max(Math.round(Number(v) || 0), lo), hi);
 
 function MathTex({ tex, display = false }) {
+  const ref = useRef(null);
   const html = useMemo(
     () => katex.renderToString(tex, { throwOnError: false, displayMode: display, strict: "ignore" }),
     [tex, display],
   );
-  return <span className="math" dangerouslySetInnerHTML={{ __html: html }} />;
+  // The tools panel is narrow: shrink a long formula until it fits,
+  // down to 60% of the normal size, before the browser paints it.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.fontSize = "";
+    const scale = el.clientWidth / el.scrollWidth;
+    if (scale < 1) el.style.fontSize = `${Math.max(0.6, scale * 0.98)}em`;
+  }, [html]);
+  return <span ref={ref} className="math" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 // The plan's equation for each tool, with the current parameter values.
@@ -350,17 +373,17 @@ function formulaTex(tool, params, img) {
         : "";
       let hbr;
       if (params.kind === "ideal") {
-        hbr = `H_{\\mathrm{BR}}&=\\begin{cases}0&C_0-W/2\\le D\\le C_0+W/2\\\\ 1&\\text{else}\\end{cases}`;
+        hbr = `H_{\\mathrm{BR}}&=\\begin{cases}0&D_0-W/2\\le D\\le D_0+W/2\\\\ 1&\\text{else}\\end{cases}`;
       } else if (params.kind === "gaussian") {
-        hbr = `H_{\\mathrm{BR}}&=1-\\exp\\!\\Bigl(-\\tfrac12\\bigl[(D^{2}-C_0^{2})/(DW)\\bigr]^{2}\\Bigr)`;
+        hbr = `H_{\\mathrm{BR}}&=1-\\exp\\!\\Bigl(-\\tfrac12\\bigl[(D^{2}-D_0^{2})/(DW)\\bigr]^{2}\\Bigr)`;
       } else {
-        hbr = `H_{\\mathrm{BR}}&=\\bigl(1+[DW/(D^{2}-C_0^{2})]^{2n}\\bigr)^{-1}`;
+        hbr = `H_{\\mathrm{BR}}&=\\bigl(1+[DW/(D^{2}-D_0^{2})]^{2n}\\bigr)^{-1}`;
       }
       const extra = params.kind === "butterworth" ? `,\\; n=${params.n}` : "";
-      return `\\begin{aligned} ${prefix}${hbr}\\\\ C_0&=${c0}\\,D_{\\max},\\; W=${w}\\,D_{\\max}${extra} \\end{aligned}`;
+      return `\\begin{aligned} ${prefix}${hbr}\\\\ D_0&=${c0}\\,D_{\\max},\\; W=${w}\\,D_{\\max}${extra} \\end{aligned}`;
     }
     case "wiener":
-      return `\\begin{aligned} \\hat{F}&=\\frac{|G|^{2}}{|G|^{2}+K\\mu}\\,G\\\\ K&=${fmt(params.k, 2)},\\; \\mu=\\mathrm{mean}|G|^{2},\\; H=1 \\end{aligned}`;
+      return `\\begin{aligned} H_W&=\\frac{S_f}{S_f+S_\\eta},\\quad S_f\\approx\\max\\bigl(|G|^{2}-S_\\eta,0\\bigr)\\\\ S_\\eta&=MN\\sigma_\\eta^{2},\\; \\sigma_\\eta=${params.noise_std} \\end{aligned}`;
     case "kalman":
       return `\\begin{aligned} x_i&=x_{i-1}+w,\\; z_i=x_i+v\\\\ \\mathrm{Var}(w)&=q=${fmt(params.q, 1)},\\; \\mathrm{Var}(v)=r=${params.r} \\end{aligned}`;
     default:
@@ -537,9 +560,9 @@ function opLabel(op) {
     case "quantization_noise": return `Quantization noise B = ${p.bits} (${2 ** p.bits} levels)`;
     case "rayleigh_noise": return `Rayleigh noise a = ${p.a}, b = ${p.b}${p.zero_mean ? ", zero-mean" : ""}`;
     case "uniform_noise": return `Uniform noise [${p.a}, ${p.b}]`;
-    case "band_reject": return `Band-reject filter (${p.kind}) C₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
-    case "band_pass": return `Band-pass filter (${p.kind}) C₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
-    case "wiener": return `Wiener filter K = ${fmt(p.k, 2)}`;
+    case "band_reject": return `Band-reject filter (${p.kind}) D₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
+    case "band_pass": return `Band-pass filter (${p.kind}) D₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
+    case "wiener": return `Wiener filter σ_η = ${p.noise_std}`;
     case "kalman": return `Kalman filter q = ${fmt(p.q, 1)}, r = ${p.r}`;
     default: return op.type;
   }

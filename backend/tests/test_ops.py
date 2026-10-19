@@ -273,10 +273,39 @@ def test_band_reject_passes_constant_image():
         assert abs(out.mean() - 120) < 2
 
 
-def test_band_pass_rejects_dc():
+def test_band_pass_rejects_dc_and_is_shown_around_mid_gray():
+    # the mean (DC) is removed; the result is offset by 128 so negative
+    # values stay visible instead of being clipped to black
     x = np.full((32, 32, 3), 120.0)
     out = frequency.band_pass(x, c0=0.30, width=0.10, kind="butterworth", n=2)
-    assert out.mean() < 15
+    assert abs(out.mean() - 128) < 4
+    noisy = np.random.default_rng(3).integers(0, 256, (40, 40, 3)).astype(np.float64)
+    assert (frequency.band_pass(noisy, c0=0.25, width=0.12) == 0).mean() < 0.01
+
+
+def _band_reference(rgb, c0, width, kind, n, bandpass):
+    """The original full-spectrum implementation (fft2 + fftshift), Eq. (39)."""
+    h, w = rgb.shape[:2]
+    p, q = 2 * h, 2 * w
+    hbr = frequency.band_reject_transfer(frequency._radial_distance(p, q), c0, width, kind, n)
+    tf = 1 - hbr if bandpass else hbr
+    padded = np.zeros((p, q, 3))
+    padded[:h, :w] = rgb
+    out = np.empty_like(padded)
+    for c in range(3):
+        g = np.fft.fftshift(np.fft.fft2(padded[..., c]))
+        out[..., c] = np.fft.ifft2(np.fft.ifftshift(tf * g)).real
+    out = out[:h, :w] + (128 if bandpass else 0)
+    return np.clip(np.floor(out + 0.5), 0, 255)
+
+
+@pytest.mark.parametrize("kind", ["ideal", "butterworth", "gaussian"])
+def test_fast_band_filters_match_fft2_reference(kind):
+    x = np.random.default_rng(4).integers(0, 256, (30, 46, 3)).astype(np.float64)
+    for bandpass, fn in ((False, frequency.band_reject), (True, frequency.band_pass)):
+        out = fn(x, c0=0.3, width=0.1, kind=kind, n=2)
+        ref = _band_reference(x, 0.3, 0.1, kind, 2, bandpass)
+        assert np.abs(out - ref).max() <= 1  # only .5 rounding ties may differ
 
 
 def test_band_pass_is_complement_of_reject_eq148():
@@ -298,14 +327,28 @@ def test_band_reject_transfer_ideal_table47():
     assert np.allclose(h + (1 - h), 1)
 
 
-def test_wiener_identity_when_k_zero():
-    assert np.array_equal(frequency.wiener(FREQ, k=0), FREQ)
+def test_wiener_identity_without_noise():
+    assert np.array_equal(frequency.wiener(FREQ, noise_std=0), FREQ)
 
 
-def test_wiener_reduces_variance():
-    out = frequency.wiener(FREQ, k=0.4)
-    assert out.var() < FREQ.var()
-    assert out.min() >= 0 and out.max() <= 255
+def test_wiener_matches_eq44():
+    x = np.random.default_rng(5).integers(0, 256, (12, 10, 1)).astype(np.float64)
+    sigma = 30.0
+    g = np.fft.fft2(x[..., 0])
+    s_eta = x.shape[0] * x.shape[1] * sigma ** 2  # S_eta = MN sigma^2
+    s_f = np.maximum(np.abs(g) ** 2 - s_eta, 0)
+    expected = np.fft.ifft2(s_f / (s_f + s_eta) * g).real
+    expected = np.clip(np.floor(expected + 0.5), 0, 255)
+    assert np.abs(frequency.wiener(x, noise_std=sigma)[..., 0] - expected).max() <= 1
+
+
+def test_wiener_removes_additive_noise():
+    y, x = np.mgrid[0:96, 0:96]
+    clean = np.dstack([110 + 50 * np.sin(x / 11) * np.cos(y / 13)] * 3)
+    noisy = clean + np.random.default_rng(6).normal(0, 20, clean.shape)
+    out = frequency.wiener(noisy, noise_std=20)
+    mse = lambda a: ((a - clean) ** 2).mean()
+    assert mse(out) < 0.5 * mse(noisy)
 
 
 def test_kalman_keeps_constant_and_smooths_impulse():
@@ -316,3 +359,38 @@ def test_kalman_keeps_constant_and_smooths_impulse():
     out = frequency.kalman(impulse, q=1, r=200)
     assert 77 < out[10, 10, 0] < 255
 
+
+def _kalman_1d_reference(z, q, r):
+    """Forward pass and RTS backward pass, written exactly as specified."""
+    n = len(z)
+    x, p = [0.0] * n, [0.0] * n
+    x[0], p[0] = z[0], r
+    for i in range(1, n):
+        p_pred = p[i - 1] + q
+        k = p_pred / (p_pred + r)
+        x[i] = x[i - 1] + k * (z[i] - x[i - 1])
+        p[i] = (1 - k) * p_pred
+    xs = x[:]
+    for i in range(n - 2, -1, -1):
+        c = p[i] / (p[i] + q)
+        xs[i] = x[i] + c * (xs[i + 1] - x[i])
+    return xs
+
+
+def test_kalman_matches_specification_rows_then_columns():
+    x = np.random.default_rng(8).integers(0, 256, (9, 11, 3)).astype(np.float64)
+    q, r = 3.0, 90.0
+    expected = np.empty_like(x)
+    for c in range(3):  # each channel on its own
+        rows = np.array([_kalman_1d_reference(row, q, r) for row in x[..., c]])
+        cols = np.array([_kalman_1d_reference(col, q, r) for col in rows.T]).T
+        expected[..., c] = cols
+    expected = np.clip(np.floor(expected + 0.5), 0, 255)
+    assert np.abs(frequency.kalman(x, q=q, r=r) - expected).max() <= 1
+
+
+def test_kalman_smooths_more_as_r_over_q_grows():
+    noisy = np.clip(np.random.default_rng(9).normal(128, 30, (40, 40, 3)), 0, 255)
+    weak = frequency.kalman(noisy, q=10, r=20)
+    strong = frequency.kalman(noisy, q=1, r=400)
+    assert strong.std() < weak.std() < noisy.std()
