@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import {
-  upload, uploadSample, uploadFromUrl, processImage, exportImage, saveBlob, EXPORT_FORMATS,
+  upload, uploadSample, uploadFromUrl, processImage, fetchOriginal, exportImage, saveBlob, EXPORT_FORMATS,
   onRequest, onStatus, checkBackend, API_URL,
 } from "./api.js";
 import { BUILTIN_SAMPLES } from "./builtinSamples.js";
@@ -225,6 +225,28 @@ const BACKEND_ONLY = new Set(
 const NOISE_TOOLS = new Set(["salt_pepper_noise", "rayleigh_noise", "uniform_noise"]);
 
 const newSeed = () => Math.floor(Math.random() * 2 ** 32);
+
+// The working session (image id and applied steps) is kept in this tab's
+// sessionStorage. When the browser reloads the tab, for example after
+// Edge put it to sleep, the image is fetched from the backend again and
+// the steps are re-applied. Storage can be unavailable; then nothing is
+// saved and the app works as before.
+const SESSION_KEY = "imagelab-session";
+
+function readSession() {
+  try {
+    return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function writeSession(value) {
+  try {
+    if (value) sessionStorage.setItem(SESSION_KEY, JSON.stringify(value));
+    else sessionStorage.removeItem(SESSION_KEY);
+  } catch { /* storage unavailable */ }
+}
 
 // tools that have no "do nothing" value: show their default effect on open
 const PREVIEW_ON_OPEN = new Set([
@@ -730,6 +752,46 @@ export default function App() {
   useEffect(() => onRequest((e) => setLog((l) => [e, ...l].slice(0, 100))), []);
   useEffect(() => onStatus(setBackend), []);
   useEffect(() => { checkBackend(); }, []);
+
+  // keep the session up to date; only images stored on the backend can be
+  // restored (in the offline mode they live in this page only)
+  useEffect(() => {
+    if (!imageId || backend !== "server") return;
+    writeSession({ imageId, fileName, sampleId: selectedSampleId, ops, redo, category, toolsOpen });
+  }, [imageId, fileName, selectedSampleId, ops, redo, category, toolsOpen, backend]);
+
+  // after a reload, bring the last session back once the backend answers
+  const restoreTried = useRef(false);
+  useEffect(() => {
+    if (backend !== "server" || restoreTried.current) return;
+    restoreTried.current = true;
+    const saved = readSession();
+    if (!saved || original) return;
+    (async () => {
+      setBusy(true);
+      try {
+        const img = await fetchOriginal(saved.imageId);
+        if (!img) {
+          writeSession(null);
+          setError("The backend was restarted, so your last image is gone. Load it again to continue.");
+          return;
+        }
+        start(saved.imageId, img, "Restored your last session.", saved.fileName, saved.sampleId);
+        if (saved.ops?.length) {
+          setCommitted(await processImage(saved.imageId, saved.ops));
+          setOps(saved.ops);
+        }
+        setRedo(saved.redo || []);
+        setCategory(saved.category ?? null);
+        setToolsOpen(saved.toolsOpen ?? true);
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setBusy(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backend]);
 
   // Scrolling down over the tools panel moves the page first, until the
   // panel reaches its sticky position and is fully on screen; only then

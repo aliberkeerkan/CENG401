@@ -259,6 +259,27 @@ export async function uploadSample(image) {
   return mode === "server" ? serverUpload(file, file.name) : mockUpload(file, file.name);
 }
 
+/** The stored original of an earlier upload, or null when the server no
+    longer has it (it keeps uploads in memory until it restarts). */
+export async function fetchOriginal(imageId) {
+  const t0 = performance.now();
+  let r;
+  try {
+    r = await fetch(`${API_URL}/images/${imageId}/original`);
+  } catch {
+    throw unreachable();
+  }
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(await errorMessage(r));
+  const image = await blobToImageData(await r.blob());
+  log({
+    method: "GET", path: `/images/${imageId}/original`, status: r.status,
+    body: "", result: `image/png ${image.width}×${image.height}`,
+    ms: Math.round(performance.now() - t0),
+  });
+  return image;
+}
+
 export function processImage(imageId, operations) {
   return mode === "server" ? serverProcess(imageId, operations) : mockProcess(imageId, operations);
 }
