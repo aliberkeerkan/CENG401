@@ -98,6 +98,24 @@ class UniformParams(BaseModel):
         return self
 
 
+class BandFilterParams(BaseModel):
+    """Gonzalez & Woods Table 4.7. c0 and width are fractions of D_max."""
+
+    c0: float = Field(gt=0, le=1, description="Band centre C0 / D_max")
+    width: float = Field(gt=0, le=1, description="Band width W / D_max")
+    kind: Literal["ideal", "butterworth", "gaussian"] = "butterworth"
+    n: int = Field(default=2, ge=1, le=8, description="Butterworth order n")
+
+
+class WienerParams(BaseModel):
+    k: float = Field(ge=0, le=5, description="NSR constant K, Eq. (5-85)")
+
+
+class KalmanParams(BaseModel):
+    q: float = Field(gt=0, le=1000, description="Process variance q")
+    r: float = Field(gt=0, le=10000, description="Measurement noise variance r")
+
+
 class CropOp(BaseModel):
     type: Literal["crop"]
     params: CropParams
@@ -133,6 +151,21 @@ class HarmonicMeanOp(BaseModel):
     params: WindowParams
 
 
+class MinimumOp(BaseModel):
+    type: Literal["minimum"]
+    params: WindowParams
+
+
+class MaximumOp(BaseModel):
+    type: Literal["maximum"]
+    params: WindowParams
+
+
+class MidpointOp(BaseModel):
+    type: Literal["midpoint"]
+    params: WindowParams
+
+
 class SaltPepperNoiseOp(BaseModel):
     type: Literal["salt_pepper_noise"]
     params: SaltPepperParams
@@ -151,6 +184,26 @@ class RayleighNoiseOp(BaseModel):
 class UniformNoiseOp(BaseModel):
     type: Literal["uniform_noise"]
     params: UniformParams
+
+
+class BandRejectOp(BaseModel):
+    type: Literal["band_reject"]
+    params: BandFilterParams
+
+
+class BandPassOp(BaseModel):
+    type: Literal["band_pass"]
+    params: BandFilterParams
+
+
+class WienerOp(BaseModel):
+    type: Literal["wiener"]
+    params: WienerParams
+
+
+class KalmanOp(BaseModel):
+    type: Literal["kalman"]
+    params: KalmanParams
 
 
 class GrayscaleOp(BaseModel):
@@ -172,7 +225,9 @@ Operation = Annotated[
     Union[
         CropOp, ResizeOp, GrayscaleOp, BrightnessOp, ContrastOp,
         GaussianBlurOp, MedianOp, ArithmeticMeanOp, GeometricMeanOp, HarmonicMeanOp,
+        MinimumOp, MaximumOp, MidpointOp,
         SaltPepperNoiseOp, QuantizationNoiseOp, RayleighNoiseOp, UniformNoiseOp,
+        BandRejectOp, BandPassOp, WienerOp, KalmanOp,
     ],
     Field(discriminator="type"),
 ]

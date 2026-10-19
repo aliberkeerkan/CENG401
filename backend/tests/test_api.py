@@ -142,6 +142,14 @@ def test_crop_and_resize_transform_alpha_too():
     assert out.shape == (20, 10, 4) and np.all(out[..., 3] == 255)
 
 
+FREQ_OPS = [
+    {"type": "band_reject", "params": {"c0": 0.25, "width": 0.10, "kind": "butterworth", "n": 2}},
+    {"type": "band_pass", "params": {"c0": 0.30, "width": 0.12, "kind": "gaussian", "n": 2}},
+    {"type": "wiener", "params": {"k": 0.1}},
+    {"type": "kalman", "params": {"q": 4, "r": 80}},
+]
+
+
 NOISE_AND_MEAN_OPS = [
     {"type": "salt_pepper_noise", "params": {"p_pepper": 0.05, "p_salt": 0.05, "seed": 3}},
     {"type": "quantization_noise", "params": {"bits": 3}},
@@ -151,6 +159,34 @@ NOISE_AND_MEAN_OPS = [
     {"type": "geometric_mean", "params": {"size": 5}},
     {"type": "harmonic_mean", "params": {"size": 3}},
 ]
+
+
+ORDER_STATISTIC_OPS = [
+    {"type": "minimum", "params": {"size": 3}},
+    {"type": "maximum", "params": {"size": 5}},
+    {"type": "midpoint", "params": {"size": 3}},
+]
+
+
+def test_order_statistic_filters_through_api():
+    arr = np.random.default_rng(8).integers(0, 256, (30, 40, 3), dtype=np.uint8)
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    for op in ORDER_STATISTIC_OPS:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 200, op["type"]
+        assert decode(r).shape == (30, 40, 3)
+
+
+def test_order_statistic_parameters_are_validated():
+    image_id = upload(png_bytes(np.zeros((8, 8, 3), dtype=np.uint8))).json()["image_id"]
+    bad = [
+        {"type": "minimum", "params": {"size": 4}},   # even window
+        {"type": "maximum", "params": {"size": 1}},   # below ge=3
+        {"type": "midpoint", "params": {"size": 17}},  # above le=15
+    ]
+    for op in bad:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 422, op
 
 
 def test_noise_and_mean_filters_through_api():
@@ -175,6 +211,30 @@ def test_noise_is_the_same_in_process_and_export():
     body = {"image_id": image_id, "operations": op}
     assert np.array_equal(decode(client.post("/process", json=body)),
                           decode(client.post("/process", json=body)))
+
+
+def test_frequency_filters_through_api():
+    arr = np.random.default_rng(7).integers(0, 256, (32, 40, 3), dtype=np.uint8)
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    for op in FREQ_OPS:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 200, op["type"]
+        assert decode(r).shape == (32, 40, 3)
+
+
+def test_frequency_parameters_are_validated():
+    image_id = upload(png_bytes(np.zeros((8, 8, 3), dtype=np.uint8))).json()["image_id"]
+    bad = [
+        {"type": "band_reject", "params": {"c0": 0, "width": 0.1}},
+        {"type": "band_pass", "params": {"c0": 0.2, "width": 0, "kind": "ideal"}},
+        {"type": "band_pass", "params": {"c0": 0.2, "width": 0.1, "kind": "box"}},
+        {"type": "wiener", "params": {"k": -0.1}},
+        {"type": "kalman", "params": {"q": 0, "r": 10}},
+        {"type": "kalman", "params": {"q": 1, "r": 0}},
+    ]
+    for op in bad:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 422, op
 
 
 def test_noise_and_mean_parameters_are_validated():

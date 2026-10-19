@@ -13,7 +13,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import basic, filters, geometry, noise
+from . import basic, filters, frequency, geometry, noise
 from .geometry import OperationError
 
 
@@ -34,10 +34,17 @@ OPERATIONS: dict[str, OpSpec] = {
     "arithmetic_mean": OpSpec(filters.arithmetic_mean),
     "geometric_mean": OpSpec(filters.geometric_mean),
     "harmonic_mean": OpSpec(filters.harmonic_mean),
+    "minimum": OpSpec(filters.minimum),
+    "maximum": OpSpec(filters.maximum),
+    "midpoint": OpSpec(filters.midpoint),
     "salt_pepper_noise": OpSpec(noise.salt_pepper),
     "quantization_noise": OpSpec(noise.quantization),
     "rayleigh_noise": OpSpec(noise.rayleigh),
     "uniform_noise": OpSpec(noise.uniform),
+    "band_reject": OpSpec(frequency.band_reject),
+    "band_pass": OpSpec(frequency.band_pass),
+    "wiener": OpSpec(frequency.wiener),
+    "kalman": OpSpec(frequency.kalman),
 }
 
 

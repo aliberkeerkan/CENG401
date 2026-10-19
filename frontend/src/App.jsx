@@ -63,6 +63,21 @@ const TOOLS = {
     sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
     describe: "Cleans salt noise well. With pepper noise the window is pulled towards zero and the image darkens.",
   },
+  minimum: {
+    label: "Min filter", eq: "31", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Takes the darkest pixel of each window. Suppresses isolated bright (salt) impulses; the image darkens overall.",
+  },
+  maximum: {
+    label: "Max filter", eq: "32", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Takes the brightest pixel of each window. Suppresses isolated dark (pepper) impulses; the image brightens overall.",
+  },
+  midpoint: {
+    label: "Midpoint filter", eq: "34", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Averages the darkest and brightest pixel of each window. Best suited to bounded random noise such as uniform noise, not salt & pepper.",
+  },
   salt_pepper_noise: {
     label: "Salt & pepper", eq: "18", heavy: true, backendOnly: true,
     sliders: [
@@ -91,6 +106,37 @@ const TOOLS = {
       { key: "b", min: -100, max: 100, step: 1, name: "b (upper bound)" },
     ],
     describe: "Adds noise drawn uniformly from [a, b]. A range symmetric around 0 adds no brightness shift.",
+  },
+  band_reject: {
+    label: "Band-reject filter", eq: "4.10", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "c0", min: 0.04, max: 0.80, step: 0.01, name: "C₀ (band centre / Dmax)" },
+      { key: "width", min: 0.02, max: 0.50, step: 0.01, name: "W (band width / Dmax)" },
+      { key: "n", min: 1, max: 8, step: 1, name: "n (Butterworth order)" },
+    ],
+    describe: "Gonzalez–Woods Table 4.7. Removes a ring of frequencies around C₀. Ideal rings; Gaussian is the smoothest.",
+  },
+  band_pass: {
+    label: "Band-pass filter", eq: "4.148", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "c0", min: 0.04, max: 0.80, step: 0.01, name: "C₀ (band centre / Dmax)" },
+      { key: "width", min: 0.02, max: 0.50, step: 0.01, name: "W (band width / Dmax)" },
+      { key: "n", min: 1, max: 8, step: 1, name: "n (Butterworth order)" },
+    ],
+    describe: "Eq. (4-148): H_BP = 1 − H_BR. Keeps only the ring around C₀, so the result looks like edges or periodic texture.",
+  },
+  wiener: {
+    label: "Wiener filter", eq: "5.85", heavy: true, backendOnly: true,
+    sliders: [{ key: "k", min: 0, max: 1, step: 0.01, name: "K (noise-to-signal)" }],
+    describe: "Gonzalez–Woods Eq. (5-85) with H = 1 (additive noise, no blur). Larger K suppresses weak frequencies more. K = 0 leaves the image unchanged.",
+  },
+  kalman: {
+    label: "Kalman filter", eq: "5.80", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "q", min: 0.5, max: 40, step: 0.5, name: "q (process variance)" },
+      { key: "r", min: 1, max: 800, step: 1, name: "r (measurement variance)" },
+    ],
+    describe: "Not in Gonzalez–Woods as a 2-D filter. Same MMSE goal as Wiener (Eq. 5-80): a 1-D random-walk Kalman smoother on each row, then each column. Large r/q smooths more.",
   },
 };
 
@@ -171,7 +217,9 @@ const newSeed = () => Math.floor(Math.random() * 2 ** 32);
 const PREVIEW_ON_OPEN = new Set([
   "gaussian_blur", "median",
   "arithmetic_mean", "geometric_mean", "harmonic_mean",
+  "minimum", "maximum", "midpoint",
   "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
+  "band_reject", "band_pass", "wiener", "kalman",
 ]);
 
 function defaultParams(tool, img) {
@@ -190,13 +238,20 @@ function defaultParams(tool, img) {
     case "median": return { size: 3 };
     case "arithmetic_mean":
     case "geometric_mean":
-    case "harmonic_mean": return { size: 3 };
+    case "harmonic_mean":
+    case "minimum":
+    case "maximum":
+    case "midpoint": return { size: 3 };
     // every noise step gets its own random seed when the tool is selected;
     // the seed stays fixed while the user adjusts the other parameters
     case "salt_pepper_noise": return { p_pepper: 0.05, p_salt: 0.05, seed: newSeed() };
     case "quantization_noise": return { bits: 4 };
     case "rayleigh_noise": return { a: 0, b: 400, zero_mean: false, seed: newSeed() };
     case "uniform_noise": return { a: -20, b: 20, seed: newSeed() };
+    case "band_reject":
+    case "band_pass": return { c0: 0.25, width: 0.12, kind: "butterworth", n: 2 };
+    case "wiener": return { k: 0.08 };
+    case "kalman": return { q: 4, r: 80 };
     default: return {};
   }
 }
@@ -209,6 +264,7 @@ function isNeutral(tool, p, img) {
   if (tool === "crop") return p.x === 0 && p.y === 0 && p.width === img.width && p.height === img.height;
   if (tool === "salt_pepper_noise") return p.p_pepper === 0 && p.p_salt === 0;
   if (tool === "quantization_noise") return p.bits === 8;
+  if (tool === "wiener") return p.k === 0;
   return false;
 }
 
@@ -261,6 +317,12 @@ function formulaTex(tool, params, img) {
       return `\\begin{aligned} \\hat{f}(x,y)&=\\exp\\!\\Bigl(\\frac{1}{mn}\\sum_{(s,t)\\in S_{xy}}\\ln\\bigl(g(s,t)+\\varepsilon\\bigr)\\Bigr)\\\\ S_{xy}&=${win} \\end{aligned}`;
     case "harmonic_mean":
       return `\\begin{aligned} \\hat{f}(x,y)&=\\frac{mn}{\\sum_{(s,t)\\in S_{xy}} 1/\\bigl(g(s,t)+\\varepsilon\\bigr)}\\\\ S_{xy}&=${win} \\end{aligned}`;
+    case "minimum":
+      return `\\hat{f}(x,y)=\\min_{(s,t)\\in S_{xy}} g(s,t),\\; S_{xy}=${win}`;
+    case "maximum":
+      return `\\hat{f}(x,y)=\\max_{(s,t)\\in S_{xy}} g(s,t),\\; S_{xy}=${win}`;
+    case "midpoint":
+      return `\\hat{f}(x,y)=\\tfrac{1}{2}\\Bigl[\\max_{(s,t)\\in S_{xy}} g(s,t)+\\min_{(s,t)\\in S_{xy}} g(s,t)\\Bigr],\\; S_{xy}=${win}`;
     case "salt_pepper_noise":
       return `\\begin{aligned} p(z)&=\\begin{cases} P_p=${fmt(params.p_pepper)} & z=0 \\\\ P_s=${fmt(params.p_salt)} & z=255 \\\\ 1-P_p-P_s & \\text{else}\\end{cases}\\\\ g&=\\begin{cases} 0 & u<P_p \\\\ 255 & P_p\\le u<P_p+P_s \\\\ f & \\text{else}\\end{cases}\\end{aligned}`;
     case "quantization_noise": {
@@ -279,6 +341,28 @@ function formulaTex(tool, params, img) {
       const std = (params.b - params.a) / Math.sqrt(12);
       return `\\begin{aligned} p(z)&=\\frac{1}{b-a},\\; ${params.a}\\le z\\le ${params.b}\\\\ g&=\\mathrm{clip}(f+z)\\\\ \\text{mean}&=${fmt((params.a + params.b) / 2, 1)},\\;\\text{std}=${fmt(std, 1)} \\end{aligned}`;
     }
+    case "band_reject":
+    case "band_pass": {
+      const c0 = fmt(params.c0, 2);
+      const w = fmt(params.width, 2);
+      const prefix = tool === "band_pass"
+        ? `H_{\\mathrm{BP}}&=1-H_{\\mathrm{BR}}\\\\ `
+        : "";
+      let hbr;
+      if (params.kind === "ideal") {
+        hbr = `H_{\\mathrm{BR}}&=\\begin{cases}0&C_0-W/2\\le D\\le C_0+W/2\\\\ 1&\\text{else}\\end{cases}`;
+      } else if (params.kind === "gaussian") {
+        hbr = `H_{\\mathrm{BR}}&=1-\\exp\\!\\Bigl(-\\tfrac12\\bigl[(D^{2}-C_0^{2})/(DW)\\bigr]^{2}\\Bigr)`;
+      } else {
+        hbr = `H_{\\mathrm{BR}}&=\\bigl(1+[DW/(D^{2}-C_0^{2})]^{2n}\\bigr)^{-1}`;
+      }
+      const extra = params.kind === "butterworth" ? `,\\; n=${params.n}` : "";
+      return `\\begin{aligned} ${prefix}${hbr}\\\\ C_0&=${c0}\\,D_{\\max},\\; W=${w}\\,D_{\\max}${extra} \\end{aligned}`;
+    }
+    case "wiener":
+      return `\\begin{aligned} \\hat{F}&=\\frac{|G|^{2}}{|G|^{2}+K\\mu}\\,G\\\\ K&=${fmt(params.k, 2)},\\; \\mu=\\mathrm{mean}|G|^{2},\\; H=1 \\end{aligned}`;
+    case "kalman":
+      return `\\begin{aligned} x_i&=x_{i-1}+w,\\; z_i=x_i+v\\\\ \\mathrm{Var}(w)&=q=${fmt(params.q, 1)},\\; \\mathrm{Var}(v)=r=${params.r} \\end{aligned}`;
     default:
       return null;
   }
@@ -446,10 +530,17 @@ function opLabel(op) {
     case "arithmetic_mean": return `Mean filter ${p.size}×${p.size}`;
     case "geometric_mean": return `Geometric mean ${p.size}×${p.size}`;
     case "harmonic_mean": return `Harmonic mean ${p.size}×${p.size}`;
+    case "minimum": return `Min filter ${p.size}×${p.size}`;
+    case "maximum": return `Max filter ${p.size}×${p.size}`;
+    case "midpoint": return `Midpoint filter ${p.size}×${p.size}`;
     case "salt_pepper_noise": return `Salt & pepper Pₚ = ${fmt(p.p_pepper, 2)}, Pₛ = ${fmt(p.p_salt, 2)}`;
     case "quantization_noise": return `Quantization noise B = ${p.bits} (${2 ** p.bits} levels)`;
     case "rayleigh_noise": return `Rayleigh noise a = ${p.a}, b = ${p.b}${p.zero_mean ? ", zero-mean" : ""}`;
     case "uniform_noise": return `Uniform noise [${p.a}, ${p.b}]`;
+    case "band_reject": return `Band-reject filter (${p.kind}) C₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
+    case "band_pass": return `Band-pass filter (${p.kind}) C₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
+    case "wiener": return `Wiener filter K = ${fmt(p.k, 2)}`;
+    case "kalman": return `Kalman filter q = ${fmt(p.q, 1)}, r = ${p.r}`;
     default: return op.type;
   }
 }
@@ -534,7 +625,18 @@ function ToolControls({ tool, params, setParams, img }) {
 
   return (
     <>
+      {(tool === "band_reject" || tool === "band_pass") && (
+        <label className="select inline">
+          <span>Transfer function (Table 4.7)</span>
+          <select value={params.kind} onChange={(e) => setParams({ ...params, kind: e.target.value })}>
+            <option value="ideal">Ideal</option>
+            <option value="butterworth">Butterworth</option>
+            <option value="gaussian">Gaussian</option>
+          </select>
+        </label>
+      )}
       {t.sliders.map((s) => {
+        if (s.key === "n" && params.kind !== "butterworth") return null;
         // with zero_mean on, the mean a + √(πb/4) is subtracted, so a has
         // no effect at all — disable the slider and say why
         const disabled = tool === "rayleigh_noise" && s.key === "a" && params.zero_mean;
