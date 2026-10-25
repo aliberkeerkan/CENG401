@@ -394,3 +394,81 @@ def test_kalman_smooths_more_as_r_over_q_grows():
     weak = frequency.kalman(noisy, q=10, r=20)
     strong = frequency.kalman(noisy, q=1, r=400)
     assert strong.std() < weak.std() < noisy.std()
+
+
+# ---------- alpha-trimmed mean (35) and adaptive median (5.4.3) ----------
+
+def _pad(x, r):
+    return np.pad(x, ((r, r), (r, r), (0, 0)), mode="reflect")  # d c b | a b c d
+
+
+def test_alpha_trimmed_mean_matches_eq35():
+    x = np.random.default_rng(10).integers(0, 256, (11, 13, 3)).astype(np.float64)
+    for size, d in ((3, 2), (3, 4), (5, 8)):
+        mn, r = size * size, size // 2
+        p = _pad(x, r)
+        expected = np.empty_like(x)
+        for yy in range(x.shape[0]):
+            for xx in range(x.shape[1]):
+                for c in range(3):
+                    g = np.sort(p[yy:yy + size, xx:xx + size, c].ravel())
+                    expected[yy, xx, c] = g[d // 2: mn - d // 2].sum() / (mn - d)
+        expected = np.clip(np.floor(expected + 0.5), 0, 255)
+        assert np.abs(filters.alpha_trimmed_mean(x, size, d) - expected).max() <= 1
+
+
+def test_alpha_trimmed_mean_between_mean_and_median():
+    x = np.random.default_rng(11).integers(0, 256, (16, 18, 3)).astype(np.float64)
+    assert np.array_equal(filters.alpha_trimmed_mean(x, 3, 0), filters.arithmetic_mean(x, 3))
+    assert np.array_equal(filters.alpha_trimmed_mean(x, 5, 24), filters.median(x, 5))
+    # one salt pixel is trimmed away with d = 2
+    flat = np.full((7, 7, 3), 100.0)
+    flat[3, 3] = 255
+    assert np.all(filters.alpha_trimmed_mean(flat, 3, 2) == 100)
+
+
+def _adaptive_reference(x, s_max):
+    """Stage A / stage B for every pixel, written out as in Section 5.4.3."""
+    out = np.empty_like(x)
+    for c in range(x.shape[2]):
+        for yy in range(x.shape[0]):
+            for xx in range(x.shape[1]):
+                z_xy, size = x[yy, xx, c], 3
+                while True:
+                    r = size // 2
+                    win = _pad(x, r)[yy:yy + size, xx:xx + size, c]
+                    z_min, z_max, z_med = win.min(), win.max(), np.median(win)
+                    if z_min < z_med < z_max:  # stage A passed: stage B
+                        out[yy, xx, c] = z_xy if z_min < z_xy < z_max else z_med
+                        break
+                    size += 2
+                    if size > s_max:
+                        out[yy, xx, c] = z_med
+                        break
+    return out
+
+
+def _salt_pepper(x, density, seed):
+    u = np.random.default_rng(seed).random(x.shape[:2])
+    y = x.copy()
+    y[u < density / 2] = 0
+    y[(u >= density / 2) & (u < density)] = 255
+    return y
+
+
+def test_adaptive_median_matches_stages_a_and_b():
+    clean = np.random.default_rng(12).integers(40, 200, (14, 15, 3)).astype(np.float64)
+    noisy = _salt_pepper(clean, 0.4, 13)
+    for s_max in (3, 7):
+        assert np.array_equal(filters.adaptive_median(noisy, s_max), _adaptive_reference(noisy, s_max))
+
+
+def test_adaptive_median_beats_median_on_dense_impulse_noise():
+    y, x = np.mgrid[0:64, 0:64]
+    clean = np.dstack([128 + 60 * np.sin(x / 7) * np.cos(y / 9)] * 3).round()
+    noisy = _salt_pepper(clean, 0.5, 14)
+    mse = lambda a: ((a - clean) ** 2).mean()
+    assert mse(filters.adaptive_median(noisy, 9)) < 0.5 * mse(filters.median(noisy, 3))
+    # pixels that are not impulses are kept as they are
+    out = filters.adaptive_median(clean, 7)
+    assert (out == clean).mean() > 0.6

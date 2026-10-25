@@ -54,6 +54,29 @@ class WindowParams(BaseModel):
         return v
 
 
+class AlphaTrimmedParams(WindowParams):
+    d: int = Field(ge=0, le=224, description="Number of sorted samples discarded, d/2 from each end, Eq. (35)")
+
+    @model_validator(mode="after")
+    def d_even_and_below_mn(self):
+        if self.d % 2:
+            raise ValueError("d must be even (d/2 values are dropped from each end).")
+        if self.d >= self.size * self.size:
+            raise ValueError(f"d must be smaller than mn = {self.size * self.size}.")
+        return self
+
+
+class AdaptiveMedianParams(BaseModel):
+    s_max: int = Field(ge=3, le=15, description="Largest window size S_max (Section 5.4.3)")
+
+    @field_validator("s_max")
+    @classmethod
+    def must_be_odd(cls, v: int) -> int:
+        if v % 2 == 0:
+            raise ValueError("S_max must be odd.")
+        return v
+
+
 # Noise is random, and /process re-runs the whole list on every change, so a
 # fixed seed keeps the same noise pattern across previews, undo/redo and
 # /export. Send a new seed to draw a new pattern.
@@ -170,6 +193,16 @@ class MidpointOp(BaseModel):
     params: WindowParams
 
 
+class AlphaTrimmedMeanOp(BaseModel):
+    type: Literal["alpha_trimmed_mean"]
+    params: AlphaTrimmedParams
+
+
+class AdaptiveMedianOp(BaseModel):
+    type: Literal["adaptive_median"]
+    params: AdaptiveMedianParams
+
+
 class SaltPepperNoiseOp(BaseModel):
     type: Literal["salt_pepper_noise"]
     params: SaltPepperParams
@@ -229,7 +262,7 @@ Operation = Annotated[
     Union[
         CropOp, ResizeOp, GrayscaleOp, BrightnessOp, ContrastOp,
         GaussianBlurOp, MedianOp, ArithmeticMeanOp, GeometricMeanOp, HarmonicMeanOp,
-        MinimumOp, MaximumOp, MidpointOp,
+        MinimumOp, MaximumOp, MidpointOp, AlphaTrimmedMeanOp, AdaptiveMedianOp,
         SaltPepperNoiseOp, QuantizationNoiseOp, RayleighNoiseOp, UniformNoiseOp,
         BandRejectOp, BandPassOp, WienerOp, KalmanOp,
     ],

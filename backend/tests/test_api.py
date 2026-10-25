@@ -262,3 +262,23 @@ def test_contrast_stretch_through_api():
     for bad in ({"r_min": 150, "r_max": 150}, {"r_min": -1, "r_max": 100}, {"r_min": 0, "r_max": 300}):
         body = {"image_id": image_id, "operations": [{"type": "contrast", "params": bad}]}
         assert client.post("/process", json=body).status_code == 422
+
+
+def test_alpha_trimmed_and_adaptive_median_through_api():
+    arr = np.random.default_rng(15).integers(0, 256, (24, 30, 3), dtype=np.uint8)
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    for op in ({"type": "alpha_trimmed_mean", "params": {"size": 5, "d": 6}},
+               {"type": "adaptive_median", "params": {"s_max": 7}}):
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 200, op
+        assert decode(r).shape == (24, 30, 3)
+    bad = [
+        {"type": "alpha_trimmed_mean", "params": {"size": 3, "d": 3}},   # odd d
+        {"type": "alpha_trimmed_mean", "params": {"size": 3, "d": 10}},  # d >= mn = 9
+        {"type": "alpha_trimmed_mean", "params": {"size": 4, "d": 2}},   # even window
+        {"type": "adaptive_median", "params": {"s_max": 8}},
+        {"type": "adaptive_median", "params": {"s_max": 17}},
+    ]
+    for op in bad:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 422, op

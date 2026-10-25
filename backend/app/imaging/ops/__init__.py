@@ -37,6 +37,8 @@ OPERATIONS: dict[str, OpSpec] = {
     "minimum": OpSpec(filters.minimum),
     "maximum": OpSpec(filters.maximum),
     "midpoint": OpSpec(filters.midpoint),
+    "alpha_trimmed_mean": OpSpec(filters.alpha_trimmed_mean),
+    "adaptive_median": OpSpec(filters.adaptive_median),
     "salt_pepper_noise": OpSpec(noise.salt_pepper),
     "quantization_noise": OpSpec(noise.quantization),
     "rayleigh_noise": OpSpec(noise.rayleigh),

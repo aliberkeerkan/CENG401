@@ -78,6 +78,19 @@ const TOOLS = {
     sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
     describe: "Averages the darkest and brightest pixel of each window. Best suited to bounded random noise such as uniform noise, not salt & pepper.",
   },
+  alpha_trimmed_mean: {
+    label: "Alpha-trimmed mean", eq: "35", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "size", min: 3, max: 15, step: 2, name: "Window size" },
+      { key: "d", min: 0, max: 224, step: 2, name: "d (values dropped, d/2 from each end)" },
+    ],
+    describe: "Sorts each window, drops the d/2 darkest and d/2 brightest values and averages the rest. d = 0 is the mean filter, the largest d is the median. Good when Gaussian-like noise and outliers are mixed.",
+  },
+  adaptive_median: {
+    label: "Adaptive median", eq: "§5.4.3", heavy: true, backendOnly: true,
+    sliders: [{ key: "s_max", min: 3, max: 15, step: 2, name: "S_max (largest window)" }],
+    describe: "Grows the window from 3 × 3 until its median is not an impulse, then replaces only pixels that are impulses themselves. Removes dense salt & pepper noise and keeps the other pixels unchanged.",
+  },
   salt_pepper_noise: {
     label: "Salt & pepper", eq: "18", heavy: true, backendOnly: true,
     sliders: [
@@ -155,7 +168,7 @@ const CATEGORIES = [
     id: "filters", label: "Filters",
     tools: [
       "arithmetic_mean", "geometric_mean", "harmonic_mean",
-      "median", "minimum", "maximum", "midpoint",
+      "median", "minimum", "maximum", "midpoint", "alpha_trimmed_mean", "adaptive_median",
     ],
   },
   {
@@ -252,7 +265,7 @@ function writeSession(value) {
 const PREVIEW_ON_OPEN = new Set([
   "gaussian_blur", "median",
   "arithmetic_mean", "geometric_mean", "harmonic_mean",
-  "minimum", "maximum", "midpoint",
+  "minimum", "maximum", "midpoint", "alpha_trimmed_mean", "adaptive_median",
   "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
   "band_reject", "band_pass", "wiener", "kalman",
 ]);
@@ -277,6 +290,8 @@ function defaultParams(tool, img) {
     case "minimum":
     case "maximum":
     case "midpoint": return { size: 3 };
+    case "alpha_trimmed_mean": return { size: 3, d: 2 };
+    case "adaptive_median": return { s_max: 7 };
     // every noise step gets its own random seed when the tool is selected;
     // the seed stays fixed while the user adjusts the other parameters
     case "salt_pepper_noise": return { p_pepper: 0.05, p_salt: 0.05, seed: newSeed() };
@@ -349,7 +364,7 @@ function formulaTex(tool, params, img) {
     }
     // the output range is the full scale: s_min = 0, s_max = 255
     case "contrast":
-      return `\\begin{aligned} s=T(r)&=\\frac{s_{\\max}-s_{\\min}}{r_{\\max}-r_{\\min}}\\cdot(r-r_{\\min})+s_{\\min}\\\\ r_{\\min}&=${params.r_min},\\; r_{\\max}=${params.r_max},\\; s_{\\min}=0,\\; s_{\\max}=255 \\end{aligned}`;
+      return `\\begin{aligned} s=T(r)&=\\frac{s_{\\max}-s_{\\min}}{r_{\\max}-r_{\\min}}\\cdot(r-r_{\\min})+s_{\\min}\\\\ r_{\\min}&=${params.r_min},\\; r_{\\max}=${params.r_max}\\\\ s_{\\min}&=0,\\; s_{\\max}=255 \\end{aligned}`;
     case "gaussian_blur": {
       const n = gaussianKernel(params.sigma).length;
       return `\\begin{aligned} w(s,t)&\\propto\\exp\\!\\left(-\\frac{s^{2}+t^{2}}{2\\sigma^{2}}\\right)\\\\ \\sigma&=${fmt(params.sigma, 1)},\\;\\text{window }${n}\\times${n} \\end{aligned}`;
@@ -368,6 +383,12 @@ function formulaTex(tool, params, img) {
       return `\\hat{f}(x,y)=\\max_{(s,t)\\in S_{xy}} g(s,t),\\; S_{xy}=${win}`;
     case "midpoint":
       return `\\hat{f}(x,y)=\\tfrac{1}{2}\\Bigl[\\max_{(s,t)\\in S_{xy}} g(s,t)+\\min_{(s,t)\\in S_{xy}} g(s,t)\\Bigr],\\; S_{xy}=${win}`;
+    case "alpha_trimmed_mean": {
+      const mn = params.size * params.size;
+      return `\\begin{aligned} \\hat{f}(x,y)&=\\frac{1}{mn-d}\\sum_{r=d/2+1}^{mn-d/2} g_{(r)}\\\\ mn&=${mn},\\; d=${params.d},\\; \\text{averaged: } ${mn - params.d} \\end{aligned}`;
+    }
+    case "adaptive_median":
+      return `\\begin{aligned} &\\text{A: } z_{\\min}<z_{\\mathrm{med}}<z_{\\max}\\;\\Rightarrow\\;\\text{B}\\\\ &\\quad\\text{else grow the window, up to } S_{\\max}=${params.s_max}\\\\ &\\text{B: } z_{\\min}<z_{xy}<z_{\\max}\\;\\Rightarrow\\; z_{xy},\\;\\text{else } z_{\\mathrm{med}} \\end{aligned}`;
     case "salt_pepper_noise":
       return `\\begin{aligned} p(z)&=\\begin{cases} P_p=${fmt(params.p_pepper)} & z=0 \\\\ P_s=${fmt(params.p_salt)} & z=255 \\\\ 1-P_p-P_s & \\text{else}\\end{cases}\\\\ g&=\\begin{cases} 0 & u<P_p \\\\ 255 & P_p\\le u<P_p+P_s \\\\ f & \\text{else}\\end{cases}\\end{aligned}`;
     case "quantization_noise": {
@@ -578,6 +599,8 @@ function opLabel(op) {
     case "minimum": return `Min filter ${p.size}×${p.size}`;
     case "maximum": return `Max filter ${p.size}×${p.size}`;
     case "midpoint": return `Midpoint filter ${p.size}×${p.size}`;
+    case "alpha_trimmed_mean": return `Alpha-trimmed mean ${p.size}×${p.size}, d = ${p.d}`;
+    case "adaptive_median": return `Adaptive median, S_max = ${p.s_max}`;
     case "salt_pepper_noise": return `Salt & pepper Pₚ = ${fmt(p.p_pepper, 2)}, Pₛ = ${fmt(p.p_salt, 2)}`;
     case "quantization_noise": return `Quantization noise B = ${p.bits} (${2 ** p.bits} levels)`;
     case "rayleigh_noise": return `Rayleigh noise a = ${p.a}, b = ${p.b}${p.zero_mean ? ", zero-mean" : ""}`;
@@ -654,6 +677,9 @@ function ToolControls({ tool, params, setParams, img }) {
       const other = key === "p_pepper" ? "p_salt" : "p_pepper";
       p[key] = Math.min(value, 1 - params[other]);
     }
+    if (tool === "alpha_trimmed_mean") {
+      p.d = Math.min(p.d, p.size * p.size - 1);
+    }
     if (tool === "contrast") {
       if (key === "r_min") p.r_min = Math.min(value, params.r_max - 1);
       if (key === "r_max") p.r_max = Math.max(value, params.r_min + 1);
@@ -666,7 +692,9 @@ function ToolControls({ tool, params, setParams, img }) {
   };
 
   const formatSlider = (s, value) =>
-    s.key === "size" ? `${value} × ${value}` : s.step < 1 ? fmt(value, s.step < 0.1 ? 2 : 1) : value;
+    s.key === "size" || s.key === "s_max" ? `${value} × ${value}` : s.step < 1 ? fmt(value, s.step < 0.1 ? 2 : 1) : value;
+  // the largest d depends on the window: d < mn
+  const sliderMax = (s) => (tool === "alpha_trimmed_mean" && s.key === "d" ? params.size * params.size - 1 : s.max);
 
   return (
     <>
@@ -688,7 +716,7 @@ function ToolControls({ tool, params, setParams, img }) {
         return (
           <label className="slider" key={s.key}>
             <span>{s.name}<output>{formatSlider(s, params[s.key])}</output></span>
-            <input type="range" min={s.min} max={s.max} step={s.step} value={params[s.key]}
+            <input type="range" min={s.min} max={sliderMax(s)} step={s.step} value={params[s.key]}
               disabled={disabled}
               onChange={(e) => setParam(s.key, Number(e.target.value))} />
           </label>

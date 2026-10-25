@@ -218,13 +218,15 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 }
 
 /* the formula strip: the equation from the plan, with live values */
-.formula { margin-top: 1rem; padding: 0.85rem 1rem; border-left: 3px solid var(--accent);
-  background: var(--paper); display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
+/* the equation number sits above the formula, so the formula gets the
+   full width of the narrow panel */
+.formula { margin-top: 1rem; padding: 0.6rem 0.9rem 0.8rem; border-left: 3px solid var(--accent);
+  background: var(--paper); display: flex; flex-direction: column; gap: 0.15rem; }
 .math { font-size: 1.02rem; line-height: 1.45; overflow-x: auto; flex: 1; min-width: 0; }
 .math .katex { font-size: 1.05em; color: var(--ink); }
 .math .katex-display { margin: 0.1em 0; text-align: left; }
 .math .katex-display > .katex { text-align: left; }
-.eqno { font-family: var(--serif); color: var(--muted); }
+.eqno { order: -1; align-self: flex-end; font-family: var(--serif); font-size: 0.85rem; line-height: 1; color: var(--muted); }
 
 .slider { display: block; margin-top: 1rem; }
 .slider > span { display: flex; justify-content: space-between; font-size: 0.88rem; }
