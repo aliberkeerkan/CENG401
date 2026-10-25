@@ -87,7 +87,8 @@ const TOOLS = {
     describe: "Sorts each window, drops the d/2 darkest and d/2 brightest values and averages the rest. d = 0 is the mean filter, the largest d is the median. Good when Gaussian-like noise and outliers are mixed.",
   },
   adaptive_median: {
-    label: "Adaptive median", eq: "§5.4.3", heavy: true, backendOnly: true,
+    // the plan describes it in Section 5.4.3 but gives it no equation number
+    label: "Adaptive median", heavy: true, backendOnly: true,
     sliders: [{ key: "s_max", min: 3, max: 15, step: 2, name: "S_max (largest window)" }],
     describe: "Grows the window from 3 × 3 until its median is not an impulse, then replaces only pixels that are impulses themselves. Removes dense salt & pepper noise and keeps the other pixels unchanged.",
   },
@@ -1157,7 +1158,7 @@ export default function App() {
                       <>
                         <div className="formula">
                           <Formula tool={tool} params={params} img={committed} />
-                          <span className="eqno">({t.eq})</span>
+                          {t.eq && <span className="eqno">({t.eq})</span>}
                         </div>
                         <p className="hint">{t.describe}</p>
 
