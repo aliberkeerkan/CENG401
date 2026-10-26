@@ -196,6 +196,35 @@ const TOOLS = {
     sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
     describe: "Midpoint of the window, (darkest + brightest) / 2. Uniform noise is bounded, so that average sits near the original value.",
   },
+  denoise_gaussian: {
+    label: "Remove Gaussian", eq: "5.85", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "noise_std", min: 1, max: 60, step: 1, name: "σ_η (noise std)" },
+      { key: "size", min: 3, max: 15, step: 2, name: "Window size" },
+    ],
+    describe: "Local Wiener estimate: keeps the window mean, shrinks deviations by how much of the local variance is noise. Set σ_η to the strength of the added noise.",
+  },
+  denoise_rayleigh: {
+    label: "Remove Rayleigh", eq: "5.85", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "noise_std", min: 1, max: 60, step: 1, name: "σ_η (noise std)" },
+      { key: "size", min: 3, max: 15, step: 2, name: "Window size" },
+    ],
+    describe: "Rayleigh noise brightens (its mean is positive), so the expected shift is subtracted first, then the local Wiener estimator smooths the rest.",
+  },
+  denoise_exponential: {
+    label: "Remove exponential", eq: "5.85", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "noise_std", min: 1, max: 60, step: 1, name: "σ_η (noise std)" },
+      { key: "size", min: 3, max: 15, step: 2, name: "Window size" },
+    ],
+    describe: "Exponential noise also brightens (mean = 1/a_E = its std). The shift is subtracted, then local Wiener smoothing is applied.",
+  },
+  denoise_gamma: {
+    label: "Remove Gamma", eq: "28", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Speckle is multiplicative (g = f·S). Averaging in the log domain turns it additive; exp brings the levels back. This is the geometric-mean core.",
+  },
 };
 
 // The tools panel first lists these groups (the plan's feature groups,
@@ -225,7 +254,8 @@ const CATEGORIES = [
   },
   {
     id: "denoise", label: "Denoise",
-    tools: ["denoise_salt_pepper", "denoise_poisson", "denoise_quantization", "denoise_uniform"],
+    tools: ["denoise_salt_pepper", "denoise_poisson", "denoise_quantization", "denoise_uniform",
+      "denoise_gaussian", "denoise_rayleigh", "denoise_exponential", "denoise_gamma"],
   },
 ];
 
@@ -331,6 +361,7 @@ const PREVIEW_ON_OPEN = new Set([
   "exponential_noise", "gamma_noise", "poisson_noise",
   "band_reject", "band_pass", "wiener", "kalman",
   "denoise_salt_pepper", "denoise_poisson", "denoise_quantization", "denoise_uniform",
+  "denoise_gaussian", "denoise_rayleigh", "denoise_exponential", "denoise_gamma",
 ]);
 
 function defaultParams(tool, img) {
@@ -370,7 +401,11 @@ function defaultParams(tool, img) {
     case "wiener": return { noise_std: 20 };
     case "kalman": return { q: 4, r: 80 };
     case "denoise_salt_pepper":
-    case "denoise_uniform": return { size: 3 };
+    case "denoise_uniform":
+    case "denoise_gamma": return { size: 3 };
+    case "denoise_gaussian":
+    case "denoise_rayleigh":
+    case "denoise_exponential": return { noise_std: 15, size: 3 };
     case "denoise_poisson":
     case "denoise_quantization": return { sigma: 1 };
     default: return {};
@@ -523,6 +558,16 @@ function formulaTex(tool, params, img) {
       return `g=f\\ast G_{\\sigma},\\;\\sigma=${fmt(params.sigma, 1)}`;
     case "denoise_poisson":
       return `\\begin{aligned} v&=2\\sqrt{f+3/8}\\\\ g&=\\mathrm{clip}\\bigl((v\\ast G_{\\sigma})^{2}/4-3/8\\bigr)\\\\ \\sigma&=${fmt(params.sigma, 1)} \\end{aligned}`;
+    case "denoise_gaussian": {
+      const v = fmt(params.noise_std, 0);
+      return `\\begin{aligned} \\hat{f}&=m_L+\\frac{\\max(\\sigma_L^{2}-\\sigma_\\eta^{2},0)}{\\sigma_L^{2}}\\,(g-m_L)\\\\ \\sigma_\\eta&=${v},\\; S_{xy}=${win} \\end{aligned}`;
+    }
+    case "denoise_rayleigh":
+      return `\\begin{aligned} g'&=g-\\sigma_\\eta\\sqrt{\\pi/(4-\\pi)}\\\\ \\hat{f}&=\\mathrm{Wiener}(g',\\,\\sigma_\\eta),\\; S_{xy}=${win} \\end{aligned}`;
+    case "denoise_exponential":
+      return `\\begin{aligned} g'&=g-\\sigma_\\eta\\\\ \\hat{f}&=\\mathrm{Wiener}(g',\\,\\sigma_\\eta),\\; S_{xy}=${win} \\end{aligned}`;
+    case "denoise_gamma":
+      return `\\begin{aligned} \\hat{f}&=\\exp\\!\\Bigl(\\frac{1}{mn}\\sum_{S_{xy}}\\ln\\bigl(g+\\varepsilon\\bigr)\\Bigr)\\\\ S_{xy}&=${win} \\end{aligned}`;
     default:
       return null;
   }
@@ -737,6 +782,10 @@ function opLabel(op) {
     case "denoise_poisson": return `Remove Poisson, σ = ${fmt(p.sigma, 1)}`;
     case "denoise_quantization": return `Remove quantization, σ = ${fmt(p.sigma, 1)}`;
     case "denoise_uniform": return `Remove uniform, midpoint ${p.size}×${p.size}`;
+    case "denoise_gaussian": return `Remove Gaussian, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
+    case "denoise_rayleigh": return `Remove Rayleigh, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
+    case "denoise_exponential": return `Remove exponential, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
+    case "denoise_gamma": return `Remove Gamma, ${p.size}×${p.size}`;
     default: return op.type;
   }
 }

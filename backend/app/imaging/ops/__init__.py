@@ -55,6 +55,10 @@ OPERATIONS: dict[str, OpSpec] = {
     "denoise_uniform": OpSpec(filters.denoise_uniform),
     "denoise_quantization": OpSpec(filters.denoise_quantization),
     "denoise_poisson": OpSpec(filters.denoise_poisson),
+    "denoise_gaussian": OpSpec(filters.denoise_gaussian),
+    "denoise_rayleigh": OpSpec(filters.denoise_rayleigh),
+    "denoise_exponential": OpSpec(filters.denoise_exponential),
+    "denoise_gamma": OpSpec(filters.denoise_gamma),
 }
 
 

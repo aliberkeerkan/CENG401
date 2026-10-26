@@ -296,3 +296,57 @@ def denoise_poisson(rgb: np.ndarray, sigma: float) -> np.ndarray:
     blurred = _gaussian_float(stabilized, sigma)
     restored = (blurred / 2.0) ** 2 - 0.375
     return np.clip(np.floor(restored + 0.5), 0, 255)
+
+
+def _window_variance(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Variance over the size x size window S_xy, via E[x^2] - E[x]^2."""
+    mean = _window_mean(rgb, size)
+    mean_sq = _window_mean(rgb * rgb, size)
+    return np.maximum(mean_sq - mean * mean, 0.0)
+
+
+def denoise_gaussian(rgb: np.ndarray, noise_std: float, size: int) -> np.ndarray:
+    """Local adaptive Wiener for additive Gaussian noise (plan 5.3.7:
+    'mean or Wiener filtering for additive Gaussian-like noise').
+
+    Local MMSE estimate: f^ = m_L + max(0, s_L^2 - v^2) / s_L^2 * (g - m_L),
+    where m_L and s_L^2 are the window mean and variance and v is the known
+    noise standard deviation. The image's own variance supplies S_f, so no
+    separate signal model is needed. noise_std = 0 leaves the image unchanged.
+    """
+    if noise_std <= 0:
+        return np.clip(np.floor(rgb + 0.5), 0, 255)
+    m = _window_mean(rgb, size)
+    var = _window_variance(rgb, size)
+    gain = np.maximum(var - noise_std ** 2, 0.0) / np.maximum(var, EPS)
+    out = m + gain * (rgb - m)
+    return np.clip(np.floor(out + 0.5), 0, 255)
+
+
+def denoise_rayleigh(rgb: np.ndarray, noise_std: float, size: int) -> np.ndarray:
+    """One-sided additive noise: subtract the expected positive shift, then
+    apply the local Wiener estimator. The Rayleigh mean is positive
+    (plan 5.3.6), so removing the shift first stops the image staying bright.
+    """
+    if noise_std <= 0:
+        return np.clip(np.floor(rgb + 0.5), 0, 255)
+    shifted = rgb - noise_std * math.sqrt(math.pi / (4.0 - math.pi))
+    return denoise_gaussian(shifted, noise_std, size)
+
+
+def denoise_exponential(rgb: np.ndarray, noise_std: float, size: int) -> np.ndarray:
+    """Like Rayleigh: the exponential mean 1/a_E equals its standard
+    deviation, so the shift equals noise_std. Local Wiener after the shift.
+    """
+    if noise_std <= 0:
+        return np.clip(np.floor(rgb + 0.5), 0, 255)
+    shifted = rgb - noise_std
+    return denoise_gaussian(shifted, noise_std, size)
+
+
+def denoise_gamma(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Multiplicative speckle (plan 5.3.4, Eqs. 20-21): g = f * S with
+    E[S] = 1. Taking logs turns it additive, the window mean smooths it, and
+    exp brings the levels back. This is the geometric mean core (Eq. 28).
+    """
+    return geometric_mean(rgb, size)

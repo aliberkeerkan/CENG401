@@ -161,6 +161,23 @@ class WienerParams(BaseModel):
     )
 
 
+class DenoiseAdditiveParams(BaseModel):
+    """Local Wiener denoising for additive noise: known noise std + window."""
+
+    noise_std: float = Field(
+        ge=0, le=128,
+        description="Standard deviation of the additive noise",
+    )
+    size: int = Field(ge=3, le=15, description="Window size m = n")
+
+    @field_validator("size")
+    @classmethod
+    def must_be_odd(cls, v: int) -> int:
+        if v % 2 == 0:
+            raise ValueError("Window size must be odd.")
+        return v
+
+
 
 class KalmanParams(BaseModel):
     q: float = Field(gt=0, le=1000, description="Process variance q")
@@ -307,6 +324,26 @@ class DenoisePoissonOp(BaseModel):
     params: GaussianBlurParams
 
 
+class DenoiseGaussianOp(BaseModel):
+    type: Literal["denoise_gaussian"]
+    params: DenoiseAdditiveParams
+
+
+class DenoiseRayleighOp(BaseModel):
+    type: Literal["denoise_rayleigh"]
+    params: DenoiseAdditiveParams
+
+
+class DenoiseExponentialOp(BaseModel):
+    type: Literal["denoise_exponential"]
+    params: DenoiseAdditiveParams
+
+
+class DenoiseGammaOp(BaseModel):
+    type: Literal["denoise_gamma"]
+    params: WindowParams
+
+
 class GrayscaleOp(BaseModel):
     type: Literal["grayscale"]
     params: EmptyParams | None = None
@@ -331,6 +368,7 @@ Operation = Annotated[
         ExponentialNoiseOp, GammaNoiseOp, PoissonNoiseOp,
         BandRejectOp, BandPassOp, WienerOp, KalmanOp,
         DenoiseSaltPepperOp, DenoiseUniformOp, DenoiseQuantizationOp, DenoisePoissonOp,
+        DenoiseGaussianOp, DenoiseRayleighOp, DenoiseExponentialOp, DenoiseGammaOp,
     ],
     Field(discriminator="type"),
 ]
