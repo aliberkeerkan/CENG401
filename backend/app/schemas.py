@@ -109,6 +109,17 @@ class RayleighParams(BaseModel):
     seed: int = Seed
 
 
+class ExponentialParams(BaseModel):
+    a: float = Field(gt=0, le=10, description="Rate a_E, Eq. (26); mean and std are 1 / a_E")
+    zero_mean: bool = Field(default=False, description="Subtract the mean 1 / a_E (no brightening)")
+    seed: int = Seed
+
+
+class GammaSpeckleParams(BaseModel):
+    nu: float = Field(gt=0, le=100, description="Shape nu of the unit-mean gain S, Eq. (21); Var(S) = 1 / nu")
+    seed: int = Seed
+
+
 class UniformParams(BaseModel):
     a: float = Field(ge=-255, le=255, description="Lower bound a_U, Eq. (25)")
     b: float = Field(ge=-255, le=255, description="Upper bound b_U, Eq. (25)")
@@ -218,6 +229,16 @@ class RayleighNoiseOp(BaseModel):
     params: RayleighParams
 
 
+class ExponentialNoiseOp(BaseModel):
+    type: Literal["exponential_noise"]
+    params: ExponentialParams
+
+
+class GammaNoiseOp(BaseModel):
+    type: Literal["gamma_noise"]
+    params: GammaSpeckleParams
+
+
 class UniformNoiseOp(BaseModel):
     type: Literal["uniform_noise"]
     params: UniformParams
@@ -264,6 +285,7 @@ Operation = Annotated[
         GaussianBlurOp, MedianOp, ArithmeticMeanOp, GeometricMeanOp, HarmonicMeanOp,
         MinimumOp, MaximumOp, MidpointOp, AlphaTrimmedMeanOp, AdaptiveMedianOp,
         SaltPepperNoiseOp, QuantizationNoiseOp, RayleighNoiseOp, UniformNoiseOp,
+        ExponentialNoiseOp, GammaNoiseOp,
         BandRejectOp, BandPassOp, WienerOp, KalmanOp,
     ],
     Field(discriminator="type"),

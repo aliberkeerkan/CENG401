@@ -472,3 +472,43 @@ def test_adaptive_median_beats_median_on_dense_impulse_noise():
     # pixels that are not impulses are kept as they are
     out = filters.adaptive_median(clean, 7)
     assert (out == clean).mean() > 0.6
+
+
+# ---------- exponential (26) and gamma / speckle (20)-(21) noise ----------
+
+def test_exponential_mean_and_variance_eq26():
+    a = 0.05  # mean 1 / a = 20, std 20
+    z = noise.exponential(FLAT, a, seed=0) - FLAT
+    assert z.min() >= 0
+    assert abs(z.mean() - 1 / a) < 0.1
+    # rounding to integers adds variance 1/12
+    assert abs(z.var() - (1 / a ** 2 + 1 / 12)) / (1 / a ** 2) < 0.01
+
+
+def test_exponential_zero_mean_option():
+    z = noise.exponential(FLAT, 0.05, zero_mean=True, seed=0) - FLAT
+    assert abs(z.mean()) < 0.1
+
+
+def test_gamma_speckle_unit_mean_gain_eq20_21():
+    nu = 10.0
+    g = noise.gamma_speckle(FLAT, nu, seed=0)
+    s = g[..., 0] / 100  # FLAT is 100, so g / f is the gain S
+    assert abs(s.mean() - 1) < 0.002
+    assert abs(s.var() - 1 / nu) / (1 / nu) < 0.02
+    # multiplicative: black stays black, and the gain is shared by R, G, B
+    assert np.all(noise.gamma_speckle(np.zeros((8, 8, 3)), nu, seed=1) == 0)
+    assert np.array_equal(g[..., 0], g[..., 1]) and np.array_equal(g[..., 1], g[..., 2])
+
+
+def test_gamma_speckle_smaller_nu_is_stronger():
+    weak = noise.gamma_speckle(FLAT, 50, seed=2)
+    strong = noise.gamma_speckle(FLAT, 2, seed=2)
+    assert strong.std() > weak.std()
+
+
+def test_exponential_and_gamma_are_reproducible_with_seed():
+    x = FLAT[:32, :32]
+    for fn, kw in [(noise.exponential, dict(a=0.1)), (noise.gamma_speckle, dict(nu=5))]:
+        assert np.array_equal(fn(x, **kw, seed=7), fn(x, **kw, seed=7))
+        assert not np.array_equal(fn(x, **kw, seed=7), fn(x, **kw, seed=8))

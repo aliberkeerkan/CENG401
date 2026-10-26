@@ -69,3 +69,32 @@ def uniform(rgb: np.ndarray, a: float, b: float,
     rng = np.random.default_rng(seed)
     z = rng.uniform(a, b, rgb.shape)
     return clip(round_half_up(rgb + z))
+
+
+def exponential(rgb: np.ndarray, a: float, zero_mean: bool = False,
+                seed: int | None = None) -> np.ndarray:
+    """Eq. (26): p(z) = a_E exp(-a_E z) for z >= 0; g = f + z.
+
+    NumPy's exponential takes the scale 1 / a_E. Mean 1 / a_E, variance
+    1 / a_E^2. The positive mean also brightens the image; with
+    zero_mean=True it is subtracted so only the fluctuation is added.
+    """
+    rng = np.random.default_rng(seed)
+    z = rng.exponential(scale=1.0 / a, size=rgb.shape)
+    if zero_mean:
+        z = z - 1.0 / a
+    return clip(round_half_up(rgb + z))
+
+
+def gamma_speckle(rgb: np.ndarray, nu: float, seed: int | None = None) -> np.ndarray:
+    """Eqs. (20)-(21): multiplicative speckle g = f S with a gamma gain
+
+        p_S(s) = nu^nu / Gamma(nu) s^(nu - 1) exp(-nu s),  s >= 0,
+
+    i.e. shape nu and scale 1 / nu, so E[S] = 1 and Var(S) = 1 / nu.
+    Smaller nu gives stronger fluctuations. One gain per pixel, shared by
+    the three channels: it scales the intensity and keeps the colour.
+    """
+    rng = np.random.default_rng(seed)
+    s = rng.gamma(shape=nu, scale=1.0 / nu, size=rgb.shape[:2])
+    return clip(round_half_up(rgb * s[..., None]))

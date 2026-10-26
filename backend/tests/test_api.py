@@ -282,3 +282,19 @@ def test_alpha_trimmed_and_adaptive_median_through_api():
     for op in bad:
         r = client.post("/process", json={"image_id": image_id, "operations": [op]})
         assert r.status_code == 422, op
+
+
+def test_exponential_and_gamma_noise_through_api():
+    arr = np.full((20, 24, 3), 120, dtype=np.uint8)
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    for op in ({"type": "exponential_noise", "params": {"a": 0.1, "zero_mean": True, "seed": 3}},
+               {"type": "gamma_noise", "params": {"nu": 8, "seed": 4}}):
+        body = {"image_id": image_id, "operations": [op]}
+        r = client.post("/process", json=body)
+        assert r.status_code == 200, op
+        assert np.array_equal(decode(r), decode(client.post("/export", json={**body, "format": "png"})))
+    for op in ({"type": "exponential_noise", "params": {"a": 0}},
+               {"type": "exponential_noise", "params": {"a": -1}},
+               {"type": "gamma_noise", "params": {"nu": 0}}):
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 422, op

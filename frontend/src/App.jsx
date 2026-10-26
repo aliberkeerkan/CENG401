@@ -121,6 +121,16 @@ const TOOLS = {
     ],
     describe: "Adds noise drawn uniformly from [a, b]. A range symmetric around 0 adds no brightness shift.",
   },
+  exponential_noise: {
+    label: "Exponential noise", eq: "26", heavy: true, backendOnly: true,
+    sliders: [{ key: "a", min: 0.01, max: 1, step: 0.01, name: "a (rate)" }],
+    describe: "Adds noise with mean and std 1/a: smaller a, stronger noise. Like Rayleigh, its mean is positive and brightens the image; the zero-mean option removes that shift.",
+  },
+  gamma_noise: {
+    label: "Gamma / speckle noise", eq: "20–21", heavy: true, backendOnly: true,
+    sliders: [{ key: "nu", min: 0.5, max: 50, step: 0.5, name: "ν (shape)" }],
+    describe: "Multiplies each pixel by a random gain S with mean 1 and variance 1/ν: smaller ν, stronger speckle. Bright areas fluctuate more than dark ones, and black stays black.",
+  },
   band_reject: {
     label: "Band-reject filter", eq: "40", heavy: true, backendOnly: true,
     sliders: [
@@ -163,7 +173,10 @@ const CATEGORIES = [
   },
   {
     id: "noise", label: "Noise",
-    tools: ["salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise"],
+    tools: [
+      "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
+      "exponential_noise", "gamma_noise",
+    ],
   },
   {
     id: "filters", label: "Filters",
@@ -236,7 +249,9 @@ const BACKEND_ONLY = new Set(
 );
 
 // noise tools whose params carry a seed
-const NOISE_TOOLS = new Set(["salt_pepper_noise", "rayleigh_noise", "uniform_noise"]);
+const NOISE_TOOLS = new Set([
+  "salt_pepper_noise", "rayleigh_noise", "uniform_noise", "exponential_noise", "gamma_noise",
+]);
 
 const newSeed = () => Math.floor(Math.random() * 2 ** 32);
 
@@ -268,6 +283,7 @@ const PREVIEW_ON_OPEN = new Set([
   "arithmetic_mean", "geometric_mean", "harmonic_mean",
   "minimum", "maximum", "midpoint", "alpha_trimmed_mean", "adaptive_median",
   "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
+  "exponential_noise", "gamma_noise",
   "band_reject", "band_pass", "wiener", "kalman",
 ]);
 
@@ -298,6 +314,8 @@ function defaultParams(tool, img) {
     case "salt_pepper_noise": return { p_pepper: 0.05, p_salt: 0.05, seed: newSeed() };
     case "quantization_noise": return { bits: 4 };
     case "rayleigh_noise": return { a: 0, b: 400, zero_mean: false, seed: newSeed() };
+    case "exponential_noise": return { a: 0.05, zero_mean: false, seed: newSeed() };
+    case "gamma_noise": return { nu: 10, seed: newSeed() };
     case "uniform_noise": return { a: -20, b: 20, seed: newSeed() };
     case "band_reject":
     case "band_pass": return { c0: 0.25, width: 0.12, kind: "butterworth", n: 2 };
@@ -404,6 +422,13 @@ function formulaTex(tool, params, img) {
       const note = params.zero_mean ? "\\;\\text{(mean subtracted)}" : "";
       return `\\begin{aligned} p(z)&=\\frac{2}{b}(z-a)\\,e^{-(z-a)^{2}/b},\\; z\\ge a\\\\ g&=\\mathrm{clip}(f+z)\\\\ \\text{mean}&=${fmt(mean, 1)},\\;\\text{std}=${fmt(std, 1)}${note} \\end{aligned}`;
     }
+    case "exponential_noise": {
+      // plan 5.3.6: show the mean (1/a) that brightens the image
+      const note = params.zero_mean ? "\\;\\text{(mean subtracted)}" : "";
+      return `\\begin{aligned} p(z)&=a\\,e^{-az},\\; z\\ge 0\\\\ g&=\\mathrm{clip}(f+z)\\\\ \\text{mean}&=${fmt(params.zero_mean ? 0 : 1 / params.a, 1)},\\;\\text{std}=${fmt(1 / params.a, 1)}${note} \\end{aligned}`;
+    }
+    case "gamma_noise":
+      return `\\begin{aligned} g&=f\\cdot S\\\\ p_S(s)&=\\frac{\\nu^{\\nu}}{\\Gamma(\\nu)}\\,s^{\\nu-1}e^{-\\nu s},\\; s\\ge 0\\\\ E[S]&=1,\\;\\mathrm{Var}(S)=1/\\nu=${fmt(1 / params.nu, 3)} \\end{aligned}`;
     case "uniform_noise": {
       const std = (params.b - params.a) / Math.sqrt(12);
       return `\\begin{aligned} p(z)&=\\frac{1}{b-a},\\; ${params.a}\\le z\\le ${params.b}\\\\ g&=\\mathrm{clip}(f+z)\\\\ \\text{mean}&=${fmt((params.a + params.b) / 2, 1)},\\;\\text{std}=${fmt(std, 1)} \\end{aligned}`;
@@ -606,6 +631,8 @@ function opLabel(op) {
     case "quantization_noise": return `Quantization noise B = ${p.bits} (${2 ** p.bits} levels)`;
     case "rayleigh_noise": return `Rayleigh noise a = ${p.a}, b = ${p.b}${p.zero_mean ? ", zero-mean" : ""}`;
     case "uniform_noise": return `Uniform noise [${p.a}, ${p.b}]`;
+    case "exponential_noise": return `Exponential noise a = ${fmt(p.a, 2)}${p.zero_mean ? ", zero-mean" : ""}`;
+    case "gamma_noise": return `Gamma / speckle noise ν = ${fmt(p.nu, 1)}`;
     case "band_reject": return `Band-reject filter (${p.kind}) D₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
     case "band_pass": return `Band-pass filter (${p.kind}) D₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
     case "wiener": return `Wiener filter σ_η = ${p.noise_std}`;
@@ -723,14 +750,14 @@ function ToolControls({ tool, params, setParams, img }) {
           </label>
         );
       })}
-      {tool === "rayleigh_noise" && (
+      {(tool === "rayleigh_noise" || tool === "exponential_noise") && (
         <>
           <label className="check">
             <input type="checkbox" checked={params.zero_mean}
               onChange={(e) => setParams({ ...params, zero_mean: e.target.checked })} />
             Subtract the mean (no brightening)
           </label>
-          {params.zero_mean && <p className="hint">Zero-mean mode: a has no effect.</p>}
+          {params.zero_mean && tool === "rayleigh_noise" && <p className="hint">Zero-mean mode: a has no effect.</p>}
         </>
       )}
       {NOISE_TOOLS.has(tool) && (
