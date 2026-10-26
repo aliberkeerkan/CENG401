@@ -537,3 +537,30 @@ def test_poisson_larger_kappa_is_weaker():
     assert weak.std() < strong.std()
     assert np.array_equal(noise.poisson(FLAT[:16, :16], 20, seed=4),
                           noise.poisson(FLAT[:16, :16], 20, seed=4))
+
+
+def test_sharpen_identity_and_soft_edge():
+    flat = np.full((16, 16, 3), 90.0)
+    assert np.array_equal(filters.sharpen(flat, amount=0), flat)
+    step = np.full((31, 31, 3), 40.0)
+    step[:, 16:] = 200
+    out = filters.sharpen(step, amount=1.5)
+    assert out[15, 15, 0] < 40 and out[15, 16, 0] > 200
+    soft = filters._gaussian_float(step, 1.5)
+    restored = filters.sharpen(soft, amount=1.0, sigma=1.5)
+    before = soft[15, 16, 0] - soft[15, 15, 0]
+    after = restored[15, 16, 0] - restored[15, 15, 0]
+    assert after > before
+
+
+def test_denoise_extras_clean_their_noise():
+    flat = np.full((11, 11, 3), 100.0)
+    speckled = flat.copy()
+    speckled[3, 3] = 0
+    speckled[7, 8] = 255
+    assert np.all(filters.denoise_salt_pepper(speckled, 3) == 100)
+    noisy = noise.uniform(np.full((18, 18, 3), 120.0), -25, 25, seed=2)
+    assert filters.denoise_uniform(noisy, 3).std() < noisy.std()
+    assert np.array_equal(filters.denoise_poisson(flat, 1.0), flat)
+    grain = noise.poisson(flat, kappa=20, seed=3)
+    assert (filters.denoise_poisson(grain, 1.2) - flat).var() < (grain - flat).var()

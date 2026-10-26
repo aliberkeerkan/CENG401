@@ -43,6 +43,14 @@ const TOOLS = {
     sliders: [{ key: "sigma", min: 0.5, max: 10, step: 0.1, name: "σ (blur scale)" }],
     describe: "Averages each pixel with its neighbours using Gaussian weights. Larger σ blurs more.",
   },
+  sharpen: {
+    label: "Sharpen", eq: "UM", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "amount", min: 0, max: 3, step: 0.1, name: "k (strength)" },
+      { key: "sigma", min: 0.5, max: 4, step: 0.1, name: "σ (edge width)" },
+    ],
+    describe: "Unsharp mask. k sets how much darker and lighter a letter edge becomes. σ is how wide that edge is: match it to the blur of the text. k = 0 leaves the image unchanged.",
+  },
   median: {
     label: "Median filter", eq: "33", heavy: true,
     sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
@@ -168,6 +176,26 @@ const TOOLS = {
     ],
     describe: "Not a Gonzalez–Woods formula: a 1-D Kalman smoother. Every row, then every column, is a 1-D signal; R, G and B are processed separately. A larger r/q smooths more; a constant image is unchanged.",
   },
+  denoise_salt_pepper: {
+    label: "Remove salt & pepper", eq: "33", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Median of the window. A lone black or white speck is not the middle value, so it drops out and the edge stays.",
+  },
+  denoise_poisson: {
+    label: "Remove Poisson", eq: "A", heavy: true, backendOnly: true,
+    sliders: [{ key: "sigma", min: 0.5, max: 5, step: 0.1, name: "σ (smooth scale)" }],
+    describe: "Anscombe transform 2√(f+3/8) makes the grain additive, a Gaussian blur smooths it, then the square brings the levels back.",
+  },
+  denoise_quantization: {
+    label: "Remove quantization", eq: "10", heavy: true, backendOnly: true,
+    sliders: [{ key: "sigma", min: 0.5, max: 5, step: 0.1, name: "σ (smooth scale)" }],
+    describe: "Blurs the hard steps of banding. The gray levels that quantization threw away are not restored.",
+  },
+  denoise_uniform: {
+    label: "Remove uniform", eq: "34", heavy: true, backendOnly: true,
+    sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
+    describe: "Midpoint of the window, (darkest + brightest) / 2. Uniform noise is bounded, so that average sits near the original value.",
+  },
 };
 
 // The tools panel first lists these groups (the plan's feature groups,
@@ -175,7 +203,7 @@ const TOOLS = {
 const CATEGORIES = [
   {
     id: "basic", label: "Basic tools",
-    tools: ["crop", "resize", "grayscale", "brightness", "contrast", "gaussian_blur"],
+    tools: ["crop", "resize", "grayscale", "brightness", "contrast", "gaussian_blur", "sharpen"],
   },
   {
     id: "noise", label: "Noise",
@@ -194,6 +222,10 @@ const CATEGORIES = [
   {
     id: "frequency", label: "Frequency domain",
     tools: ["band_reject", "band_pass", "wiener", "kalman"],
+  },
+  {
+    id: "denoise", label: "Denoise",
+    tools: ["denoise_salt_pepper", "denoise_poisson", "denoise_quantization", "denoise_uniform"],
   },
 ];
 
@@ -229,6 +261,12 @@ const ICONS = {
   frequency: (
     <svg {...svgProps}>
       <path d="M2.5 10c1.6-5 3.4-5 5 0s3.4 5 5 0 3.4-5 5 0" />
+    </svg>
+  ),
+  denoise: (
+    <svg {...svgProps}>
+      <path d="M4 10h12M10 4v12" />
+      <circle cx="10" cy="10" r="6.5" />
     </svg>
   ),
   menu: (
@@ -286,12 +324,13 @@ function writeSession(value) {
 
 // tools that have no "do nothing" value: show their default effect on open
 const PREVIEW_ON_OPEN = new Set([
-  "gaussian_blur", "median",
+  "gaussian_blur", "sharpen", "median",
   "arithmetic_mean", "geometric_mean", "harmonic_mean",
   "minimum", "maximum", "midpoint", "alpha_trimmed_mean", "adaptive_median",
   "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
   "exponential_noise", "gamma_noise", "poisson_noise",
   "band_reject", "band_pass", "wiener", "kalman",
+  "denoise_salt_pepper", "denoise_poisson", "denoise_quantization", "denoise_uniform",
 ]);
 
 function defaultParams(tool, img) {
@@ -307,6 +346,7 @@ function defaultParams(tool, img) {
       return { r_min, r_max };
     }
     case "gaussian_blur": return { sigma: 1.5 };
+    case "sharpen": return { amount: 1, sigma: 1.5 };
     case "median": return { size: 3 };
     case "arithmetic_mean":
     case "geometric_mean":
@@ -329,6 +369,10 @@ function defaultParams(tool, img) {
     case "band_pass": return { c0: 0.25, width: 0.12, kind: "butterworth", n: 2 };
     case "wiener": return { noise_std: 20 };
     case "kalman": return { q: 4, r: 80 };
+    case "denoise_salt_pepper":
+    case "denoise_uniform": return { size: 3 };
+    case "denoise_poisson":
+    case "denoise_quantization": return { sigma: 1 };
     default: return {};
   }
 }
@@ -342,6 +386,7 @@ function isNeutral(tool, p, img) {
   if (tool === "salt_pepper_noise") return p.p_pepper === 0 && p.p_salt === 0;
   if (tool === "quantization_noise") return p.bits === 8;
   if (tool === "wiener") return p.noise_std === 0;
+  if (tool === "sharpen") return p.amount === 0;
   return false;
 }
 
@@ -396,6 +441,8 @@ function formulaTex(tool, params, img) {
       const n = gaussianKernel(params.sigma).length;
       return `\\begin{aligned} w(s,t)&\\propto\\exp\\!\\left(-\\frac{s^{2}+t^{2}}{2\\sigma^{2}}\\right)\\\\ \\sigma&=${fmt(params.sigma, 1)},\\;\\text{window }${n}\\times${n} \\end{aligned}`;
     }
+    case "sharpen":
+      return `\\begin{aligned} g&=\\mathrm{clip}\\bigl(f+k(f-f\\ast G_{\\sigma})\\bigr)\\\\ k&=${fmt(params.amount, 1)},\\;\\sigma=${fmt(params.sigma, 1)} \\end{aligned}`;
     case "median":
       return `\\hat{f}(x,y)=\\mathrm{median}\\{g(s,t)\\},\\; S_{xy}=${win}`;
     case "arithmetic_mean":
@@ -468,6 +515,14 @@ function formulaTex(tool, params, img) {
       return `\\begin{aligned} H_W&=\\frac{S_f}{S_f+S_\\eta},\\quad S_f\\approx\\max\\bigl(|G|^{2}-S_\\eta,0\\bigr)\\\\ S_\\eta&=MN\\sigma_\\eta^{2},\\; \\sigma_\\eta=${params.noise_std} \\end{aligned}`;
     case "kalman":
       return `\\begin{aligned} x_i&=x_{i-1}+w,\\; z_i=x_i+v\\\\ \\mathrm{Var}(w)&=q=${fmt(params.q, 1)},\\; \\mathrm{Var}(v)=r=${params.r} \\end{aligned}`;
+    case "denoise_salt_pepper":
+      return `\\hat{f}(x,y)=\\mathrm{median}\\{g(s,t)\\},\\; S_{xy}=${win}`;
+    case "denoise_uniform":
+      return `\\hat{f}(x,y)=\\tfrac12\\bigl(\\max g+\\min g\\bigr),\\; S_{xy}=${win}`;
+    case "denoise_quantization":
+      return `g=f\\ast G_{\\sigma},\\;\\sigma=${fmt(params.sigma, 1)}`;
+    case "denoise_poisson":
+      return `\\begin{aligned} v&=2\\sqrt{f+3/8}\\\\ g&=\\mathrm{clip}\\bigl((v\\ast G_{\\sigma})^{2}/4-3/8\\bigr)\\\\ \\sigma&=${fmt(params.sigma, 1)} \\end{aligned}`;
     default:
       return null;
   }
@@ -572,8 +627,15 @@ function CropOverlay({ img, rect, onChange }) {
   );
 }
 
-function ImageCanvas({ image, label, note, overlay, footer }) {
+function pixelChannels(img, x, y) {
+  const i = (y * img.width + x) * 4;
+  const d = img.data;
+  return [d[i], d[i + 1], d[i + 2]];
+}
+
+function ImageCanvas({ image, label, note, overlay, footer, probeBefore }) {
   const ref = useRef(null);
+  const [hit, setHit] = useState(null);
   useEffect(() => {
     if (!image || !ref.current) return;
     const c = ref.current;
@@ -581,6 +643,20 @@ function ImageCanvas({ image, label, note, overlay, footer }) {
     c.height = image.height;
     c.getContext("2d").putImageData(image, 0, 0);
   }, [image]);
+
+  function locate(e) {
+    if (!image) return;
+    const b = e.currentTarget.getBoundingClientRect();
+    if (b.width === 0 || b.height === 0) return;
+    const x = clampInt(((e.clientX - b.left) / b.width) * image.width, 0, image.width - 1);
+    const y = clampInt(((e.clientY - b.top) / b.height) * image.height, 0, image.height - 1);
+    setHit({ x, y, rgb: pixelChannels(image, x, y) });
+  }
+
+  const probeText = !hit
+    ? "Hover a pixel to read its coordinates."
+    : `(${hit.x}, ${hit.y})  ${hit.rgb.join(", ")}`;
+
   return (
     <figure className="frame">
       <figcaption>
@@ -588,11 +664,16 @@ function ImageCanvas({ image, label, note, overlay, footer }) {
         {note && <span className="note">{note}</span>}
       </figcaption>
       <div className="frame-body">
-        <div className="canvas-wrap">
+        <div
+          className={"canvas-wrap" + (probeBefore ? " probe" : "")}
+          onPointerMove={probeBefore ? locate : undefined}
+          onPointerLeave={probeBefore ? () => setHit(null) : undefined}
+        >
           <canvas ref={ref} aria-label={label} />
           {overlay}
         </div>
       </div>
+      {probeBefore && <p className="pixel-probe">{probeText}</p>}
       {footer && <div className="frame-foot">{footer}</div>}
     </figure>
   );
@@ -651,6 +732,11 @@ function opLabel(op) {
     case "band_pass": return `Band-pass filter (${p.kind}) D₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
     case "wiener": return `Wiener filter σ_η = ${p.noise_std}`;
     case "kalman": return `Kalman filter q = ${fmt(p.q, 1)}, r = ${p.r}`;
+    case "sharpen": return `Sharpen k = ${fmt(p.amount, 1)}, σ = ${fmt(p.sigma, 1)}`;
+    case "denoise_salt_pepper": return `Remove salt & pepper, median ${p.size}×${p.size}`;
+    case "denoise_poisson": return `Remove Poisson, σ = ${fmt(p.sigma, 1)}`;
+    case "denoise_quantization": return `Remove quantization, σ = ${fmt(p.sigma, 1)}`;
+    case "denoise_uniform": return `Remove uniform, midpoint ${p.size}×${p.size}`;
     default: return op.type;
   }
 }
@@ -1255,6 +1341,7 @@ export default function App() {
                   image={shown}
                   label="Processed"
                   note={processedNote}
+                  probeBefore={tool !== "crop" ? committed : null}
                   overlay={tool === "crop" && committed && (
                     <CropOverlay img={committed} rect={params} onChange={editParams} />
                   )}

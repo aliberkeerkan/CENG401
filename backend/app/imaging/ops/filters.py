@@ -38,24 +38,26 @@ def _reflect_index(n: int, r: int) -> np.ndarray:
     return np.where(idx >= n, period - idx, idx)
 
 
-def gaussian_blur(rgb: np.ndarray, sigma: float) -> np.ndarray:
+def _gaussian_float(rgb: np.ndarray, sigma: float) -> np.ndarray:
+    """Separable Gaussian, same tap order as the JavaScript blur, unrounded."""
     k = gaussian_kernel(sigma)
     r = len(k) // 2
     h, w = rgb.shape[:2]
 
-    # horizontal pass: taps accumulated in the same order as the JS version
     src = rgb[:, _reflect_index(w, r)]
     tmp = np.zeros_like(rgb, dtype=np.float64)
     for i, wt in enumerate(k):
         tmp = tmp + wt * src[:, i:i + w]
 
-    # vertical pass
     src = tmp[_reflect_index(h, r)]
     out = np.zeros_like(rgb, dtype=np.float64)
     for i, wt in enumerate(k):
         out = out + wt * src[i:i + h]
+    return out
 
-    return np.clip(np.floor(out + 0.5), 0, 255)
+
+def gaussian_blur(rgb: np.ndarray, sigma: float) -> np.ndarray:
+    return np.clip(np.floor(_gaussian_float(rgb, sigma) + 0.5), 0, 255)
 
 
 # Added to g before ln(g) and 1/g so that zero pixels (for example pepper
@@ -256,3 +258,41 @@ def adaptive_median(rgb: np.ndarray, s_max: int) -> np.ndarray:
                     break
             out[..., c] = result
     return out
+
+
+def sharpen(rgb: np.ndarray, amount: float, sigma: float = 1.5) -> np.ndarray:
+    """Unsharp mask, Gonzalez–Woods 3.6.3: g = clip(f + k (f - blur(f))).
+
+    The blur is the unrounded Gaussian. k = 0 leaves the image unchanged.
+    sigma is the width of the edge that gets contrast.
+    """
+    blurred = _gaussian_float(rgb, sigma)
+    return np.clip(np.floor(rgb + amount * (rgb - blurred) + 0.5), 0, 255)
+
+
+def denoise_salt_pepper(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Median window. An isolated black or white speck cannot be the median."""
+    return median(rgb, size)
+
+
+def denoise_uniform(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Midpoint window. Uniform noise is bounded, so (min + max) / 2 sits near the signal."""
+    return midpoint(rgb, size)
+
+
+def denoise_quantization(rgb: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian blur. Softens the steps of banding; the discarded gray levels stay lost."""
+    return gaussian_blur(rgb, sigma)
+
+
+def denoise_poisson(rgb: np.ndarray, sigma: float) -> np.ndarray:
+    """Anscombe transform, Gaussian blur, then the algebraic inverse.
+
+    2 sqrt(f + 3/8) turns Poisson grain into roughly additive noise. This is
+    separate from the Poisson noise model (19): it only cleans an image that
+    already has that grain.
+    """
+    stabilized = 2.0 * np.sqrt(np.clip(rgb, 0, None) + 0.375)
+    blurred = _gaussian_float(stabilized, sigma)
+    restored = (blurred / 2.0) ** 2 - 0.375
+    return np.clip(np.floor(restored + 0.5), 0, 255)

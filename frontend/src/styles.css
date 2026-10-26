@@ -260,6 +260,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
     linear-gradient(45deg, var(--panel) 25%, transparent 25%, transparent 75%, var(--panel) 75%);
   background-size: 16px 16px; background-position: 0 0, 8px 8px; }
 .canvas-wrap { position: relative; display: inline-block; line-height: 0; max-width: 100%; }
+.canvas-wrap.probe { cursor: crosshair; }
+.pixel-probe { margin: 0; padding: 0.45rem 0.8rem; border-top: 1px solid var(--line);
+  font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .crop-overlay { position: absolute; inset: 0; cursor: crosshair; overflow: hidden; touch-action: none; }
 .crop-rect { position: absolute; border: 2px solid #ffffff; outline: 1px solid rgba(0,0,0,.6);
   box-shadow: 0 0 0 9999px rgba(10, 20, 28, 0.55); pointer-events: none; }

@@ -30,6 +30,7 @@ OPERATIONS: dict[str, OpSpec] = {
     "brightness": OpSpec(basic.brightness),
     "contrast": OpSpec(basic.contrast),
     "gaussian_blur": OpSpec(filters.gaussian_blur),
+    "sharpen": OpSpec(filters.sharpen),
     "median": OpSpec(filters.median),
     "arithmetic_mean": OpSpec(filters.arithmetic_mean),
     "geometric_mean": OpSpec(filters.geometric_mean),
@@ -50,6 +51,10 @@ OPERATIONS: dict[str, OpSpec] = {
     "band_pass": OpSpec(frequency.band_pass),
     "wiener": OpSpec(frequency.wiener),
     "kalman": OpSpec(frequency.kalman),
+    "denoise_salt_pepper": OpSpec(filters.denoise_salt_pepper),
+    "denoise_uniform": OpSpec(filters.denoise_uniform),
+    "denoise_quantization": OpSpec(filters.denoise_quantization),
+    "denoise_poisson": OpSpec(filters.denoise_poisson),
 }
 
 
