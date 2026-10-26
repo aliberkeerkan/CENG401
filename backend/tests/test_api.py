@@ -310,3 +310,19 @@ def test_poisson_noise_through_api():
     for bad in ({"kappa": 0}, {"kappa": -5}):
         body = {"image_id": image_id, "operations": [{"type": "poisson_noise", "params": bad}]}
         assert client.post("/process", json=body).status_code == 422
+
+
+def test_sharpen_and_denoise_through_api():
+    arr = np.full((16, 16, 3), 110, dtype=np.uint8)
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    ops = [
+        {"type": "sharpen", "params": {"amount": 1, "sigma": 1.5}},
+        {"type": "denoise_salt_pepper", "params": {"size": 3}},
+        {"type": "denoise_uniform", "params": {"size": 3}},
+        {"type": "denoise_quantization", "params": {"sigma": 1.0}},
+        {"type": "denoise_poisson", "params": {"sigma": 1.0}},
+    ]
+    for op in ops:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 200, op["type"]
+        assert decode(r).shape == (16, 16, 3)

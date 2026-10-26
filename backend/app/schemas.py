@@ -41,6 +41,11 @@ class GaussianBlurParams(BaseModel):
     sigma: float = Field(ge=0.3, le=15, description="Blur scale sigma_b, Eq. (10)")
 
 
+class SharpenParams(BaseModel):
+    amount: float = Field(ge=0, le=5, description="Unsharp-mask strength k; 0 leaves the image unchanged")
+    sigma: float = Field(default=1.5, ge=0.5, le=4, description="Gaussian radius of the mask")
+
+
 class WindowParams(BaseModel):
     """Spatial filters over an m x n = size x size window S_xy (Section 5.4)."""
 
@@ -277,6 +282,31 @@ class KalmanOp(BaseModel):
     params: KalmanParams
 
 
+class SharpenOp(BaseModel):
+    type: Literal["sharpen"]
+    params: SharpenParams
+
+
+class DenoiseSaltPepperOp(BaseModel):
+    type: Literal["denoise_salt_pepper"]
+    params: WindowParams
+
+
+class DenoiseUniformOp(BaseModel):
+    type: Literal["denoise_uniform"]
+    params: WindowParams
+
+
+class DenoiseQuantizationOp(BaseModel):
+    type: Literal["denoise_quantization"]
+    params: GaussianBlurParams
+
+
+class DenoisePoissonOp(BaseModel):
+    type: Literal["denoise_poisson"]
+    params: GaussianBlurParams
+
+
 class GrayscaleOp(BaseModel):
     type: Literal["grayscale"]
     params: EmptyParams | None = None
@@ -295,11 +325,12 @@ class ContrastOp(BaseModel):
 Operation = Annotated[
     Union[
         CropOp, ResizeOp, GrayscaleOp, BrightnessOp, ContrastOp,
-        GaussianBlurOp, MedianOp, ArithmeticMeanOp, GeometricMeanOp, HarmonicMeanOp,
+        GaussianBlurOp, SharpenOp, MedianOp, ArithmeticMeanOp, GeometricMeanOp, HarmonicMeanOp,
         MinimumOp, MaximumOp, MidpointOp, AlphaTrimmedMeanOp, AdaptiveMedianOp,
         SaltPepperNoiseOp, QuantizationNoiseOp, RayleighNoiseOp, UniformNoiseOp,
         ExponentialNoiseOp, GammaNoiseOp, PoissonNoiseOp,
         BandRejectOp, BandPassOp, WienerOp, KalmanOp,
+        DenoiseSaltPepperOp, DenoiseUniformOp, DenoiseQuantizationOp, DenoisePoissonOp,
     ],
     Field(discriminator="type"),
 ]
