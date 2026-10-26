@@ -115,6 +115,14 @@ class ExponentialParams(BaseModel):
     seed: int = Seed
 
 
+class PoissonParams(BaseModel):
+    kappa: float = Field(
+        ge=0.1, le=100000,
+        description="Photon-count scale kappa, Eq. (19): lambda = kappa f / (L-1); larger kappa, weaker noise",
+    )
+    seed: int = Seed
+
+
 class GammaSpeckleParams(BaseModel):
     nu: float = Field(gt=0, le=100, description="Shape nu of the unit-mean gain S, Eq. (21); Var(S) = 1 / nu")
     seed: int = Seed
@@ -234,6 +242,11 @@ class ExponentialNoiseOp(BaseModel):
     params: ExponentialParams
 
 
+class PoissonNoiseOp(BaseModel):
+    type: Literal["poisson_noise"]
+    params: PoissonParams
+
+
 class GammaNoiseOp(BaseModel):
     type: Literal["gamma_noise"]
     params: GammaSpeckleParams
@@ -285,7 +298,7 @@ Operation = Annotated[
         GaussianBlurOp, MedianOp, ArithmeticMeanOp, GeometricMeanOp, HarmonicMeanOp,
         MinimumOp, MaximumOp, MidpointOp, AlphaTrimmedMeanOp, AdaptiveMedianOp,
         SaltPepperNoiseOp, QuantizationNoiseOp, RayleighNoiseOp, UniformNoiseOp,
-        ExponentialNoiseOp, GammaNoiseOp,
+        ExponentialNoiseOp, GammaNoiseOp, PoissonNoiseOp,
         BandRejectOp, BandPassOp, WienerOp, KalmanOp,
     ],
     Field(discriminator="type"),

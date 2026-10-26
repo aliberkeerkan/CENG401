@@ -47,7 +47,7 @@ pytest
 | Basic | `crop` {x, y, width, height}, `resize` {width, height, method}, `grayscale`, `brightness` {beta}, `contrast` {r_min, r_max: 0–255, r_min < r_max} |
 | Filters | `gaussian_blur` {sigma}, `median`, `arithmetic_mean`, `geometric_mean`, `harmonic_mean`, `minimum`, `maximum`, `midpoint` {size: odd, 3–15}, `alpha_trimmed_mean` (35) {size, d: even, d < size²}, `adaptive_median` (5.4.3) {s_max: odd, 3–15} |
 | Frequency | `band_reject` (40) / `band_pass` (41) {c0, width: fractions of D_max, kind: ideal \| butterworth \| gaussian, n}, `wiener` (44) {noise_std}, `kalman` {q, r}: 1-D Kalman smoother on rows, then columns |
-| Noise | `salt_pepper_noise` {p_pepper, p_salt, seed}, `quantization_noise` {bits: 1–8}, `rayleigh_noise` {a, b, zero_mean, seed}, `uniform_noise` {a, b, seed}, `exponential_noise` (26) {a, zero_mean, seed}, `gamma_noise` (20)-(21) {nu, seed} |
+| Noise | `salt_pepper_noise` {p_pepper, p_salt, seed}, `quantization_noise` {bits: 1–8}, `rayleigh_noise` {a, b, zero_mean, seed}, `uniform_noise` {a, b, seed}, `exponential_noise` (26) {a, zero_mean, seed}, `gamma_noise` (20)-(21) {nu, seed}, `poisson_noise` (19) {kappa, seed} |
 
 Limits are listed in `app/schemas.py` and on the `/docs` page.
 
@@ -75,7 +75,7 @@ app/
       geometry.py    crop (4), resize: nearest / bilinear (5)
       filters.py     Gaussian blur (10), mean filters (27)-(29), order statistics (31)-(34), alpha-trimmed mean (35), adaptive median (5.4.3)
       frequency.py   band-reject (40), band-pass (41), Wiener (44), Kalman smoother
-      noise.py       salt-and-pepper (18), gamma/speckle (20)-(21), quantization (22), Rayleigh (24), uniform (25), exponential (26)
+      noise.py       salt-and-pepper (18), Poisson (19), gamma/speckle (20)-(21), quantization (22), Rayleigh (24), uniform (25), exponential (26)
 tests/               unit and API tests
 ```
 

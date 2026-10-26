@@ -44,6 +44,7 @@ OPERATIONS: dict[str, OpSpec] = {
     "rayleigh_noise": OpSpec(noise.rayleigh),
     "exponential_noise": OpSpec(noise.exponential),
     "gamma_noise": OpSpec(noise.gamma_speckle),
+    "poisson_noise": OpSpec(noise.poisson),
     "uniform_noise": OpSpec(noise.uniform),
     "band_reject": OpSpec(frequency.band_reject),
     "band_pass": OpSpec(frequency.band_pass),

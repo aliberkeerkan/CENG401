@@ -298,3 +298,15 @@ def test_exponential_and_gamma_noise_through_api():
                {"type": "gamma_noise", "params": {"nu": 0}}):
         r = client.post("/process", json={"image_id": image_id, "operations": [op]})
         assert r.status_code == 422, op
+
+
+def test_poisson_noise_through_api():
+    arr = np.full((20, 24, 3), 120, dtype=np.uint8)
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    body = {"image_id": image_id, "operations": [{"type": "poisson_noise", "params": {"kappa": 30, "seed": 5}}]}
+    r = client.post("/process", json=body)
+    assert r.status_code == 200
+    assert np.array_equal(decode(r), decode(client.post("/export", json={**body, "format": "png"})))
+    for bad in ({"kappa": 0}, {"kappa": -5}):
+        body = {"image_id": image_id, "operations": [{"type": "poisson_noise", "params": bad}]}
+        assert client.post("/process", json=body).status_code == 422

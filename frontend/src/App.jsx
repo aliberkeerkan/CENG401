@@ -131,6 +131,12 @@ const TOOLS = {
     sliders: [{ key: "nu", min: 0.5, max: 50, step: 0.5, name: "ν (shape)" }],
     describe: "Multiplies each pixel by a random gain S with mean 1 and variance 1/ν: smaller ν, stronger speckle. Bright areas fluctuate more than dark ones, and black stays black.",
   },
+  poisson_noise: {
+    label: "Poisson noise", eq: "19", heavy: true, backendOnly: true,
+    // one custom slider (noise strength, inverse and logarithmic in κ)
+    sliders: [],
+    describe: "Photon-counting noise: each pixel is a random photon count with mean κ·f/255. Brighter pixels get more noise, black stays black. Fewer photons (smaller κ) means stronger noise.",
+  },
   band_reject: {
     label: "Band-reject filter", eq: "40", heavy: true, backendOnly: true,
     sliders: [
@@ -175,7 +181,7 @@ const CATEGORIES = [
     id: "noise", label: "Noise",
     tools: [
       "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
-      "exponential_noise", "gamma_noise",
+      "exponential_noise", "gamma_noise", "poisson_noise",
     ],
   },
   {
@@ -251,6 +257,7 @@ const BACKEND_ONLY = new Set(
 // noise tools whose params carry a seed
 const NOISE_TOOLS = new Set([
   "salt_pepper_noise", "rayleigh_noise", "uniform_noise", "exponential_noise", "gamma_noise",
+  "poisson_noise",
 ]);
 
 const newSeed = () => Math.floor(Math.random() * 2 ** 32);
@@ -283,7 +290,7 @@ const PREVIEW_ON_OPEN = new Set([
   "arithmetic_mean", "geometric_mean", "harmonic_mean",
   "minimum", "maximum", "midpoint", "alpha_trimmed_mean", "adaptive_median",
   "salt_pepper_noise", "quantization_noise", "rayleigh_noise", "uniform_noise",
-  "exponential_noise", "gamma_noise",
+  "exponential_noise", "gamma_noise", "poisson_noise",
   "band_reject", "band_pass", "wiener", "kalman",
 ]);
 
@@ -316,6 +323,7 @@ function defaultParams(tool, img) {
     case "rayleigh_noise": return { a: 0, b: 400, zero_mean: false, seed: newSeed() };
     case "exponential_noise": return { a: 0.05, zero_mean: false, seed: newSeed() };
     case "gamma_noise": return { nu: 10, seed: newSeed() };
+    case "poisson_noise": return { kappa: 100, seed: newSeed() };
     case "uniform_noise": return { a: -20, b: 20, seed: newSeed() };
     case "band_reject":
     case "band_pass": return { c0: 0.25, width: 0.12, kind: "butterworth", n: 2 };
@@ -429,6 +437,11 @@ function formulaTex(tool, params, img) {
     }
     case "gamma_noise":
       return `\\begin{aligned} g&=f\\cdot S\\\\ p_S(s)&=\\frac{\\nu^{\\nu}}{\\Gamma(\\nu)}\\,s^{\\nu-1}e^{-\\nu s},\\; s\\ge 0\\\\ E[S]&=1,\\;\\mathrm{Var}(S)=1/\\nu=${fmt(1 / params.nu, 3)} \\end{aligned}`;
+    case "poisson_noise": {
+      // Var(g) = (L-1) f / κ: show the std it gives at mid-gray
+      const std = Math.sqrt((255 * 128) / params.kappa);
+      return `\\begin{aligned} K&\\sim\\mathrm{Poisson}(\\lambda),\\; P(K=k)=\\frac{e^{-\\lambda}\\lambda^{k}}{k!}\\\\ \\lambda&=\\kappa\\,\\frac{f}{L-1},\\quad g=(L-1)\\,\\frac{K}{\\kappa}\\\\ \\kappa&=${params.kappa},\\;\\text{std at } f=128\\text{: } ${fmt(std, 1)} \\end{aligned}`;
+    }
     case "uniform_noise": {
       const std = (params.b - params.a) / Math.sqrt(12);
       return `\\begin{aligned} p(z)&=\\frac{1}{b-a},\\; ${params.a}\\le z\\le ${params.b}\\\\ g&=\\mathrm{clip}(f+z)\\\\ \\text{mean}&=${fmt((params.a + params.b) / 2, 1)},\\;\\text{std}=${fmt(std, 1)} \\end{aligned}`;
@@ -633,6 +646,7 @@ function opLabel(op) {
     case "uniform_noise": return `Uniform noise [${p.a}, ${p.b}]`;
     case "exponential_noise": return `Exponential noise a = ${fmt(p.a, 2)}${p.zero_mean ? ", zero-mean" : ""}`;
     case "gamma_noise": return `Gamma / speckle noise ν = ${fmt(p.nu, 1)}`;
+    case "poisson_noise": return `Poisson noise κ = ${p.kappa}`;
     case "band_reject": return `Band-reject filter (${p.kind}) D₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
     case "band_pass": return `Band-pass filter (${p.kind}) D₀ = ${fmt(p.c0, 2)}, W = ${fmt(p.width, 2)}`;
     case "wiener": return `Wiener filter σ_η = ${p.noise_std}`;
@@ -734,6 +748,15 @@ function ToolControls({ tool, params, setParams, img }) {
             <option value="butterworth">Butterworth</option>
             <option value="gaussian">Gaussian</option>
           </select>
+        </label>
+      )}
+      {tool === "poisson_noise" && (
+        // plan 5.3.3: the user-facing strength is inverse to κ; the slider
+        // moves log10(κ) from 3 (κ = 1000, weak) down to 0 (κ = 1, strong)
+        <label className="slider">
+          <span>Noise strength<output>κ = {params.kappa}</output></span>
+          <input type="range" min={0} max={3} step={0.05} value={3 - Math.log10(params.kappa)}
+            onChange={(e) => setParams({ ...params, kappa: Number((10 ** (3 - Number(e.target.value))).toPrecision(3)) })} />
         </label>
       )}
       {t.sliders.map((s) => {

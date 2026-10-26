@@ -512,3 +512,28 @@ def test_exponential_and_gamma_are_reproducible_with_seed():
     for fn, kw in [(noise.exponential, dict(a=0.1)), (noise.gamma_speckle, dict(nu=5))]:
         assert np.array_equal(fn(x, **kw, seed=7), fn(x, **kw, seed=7))
         assert not np.array_equal(fn(x, **kw, seed=7), fn(x, **kw, seed=8))
+
+
+# ---------- Poisson noise (19) ----------
+
+def test_poisson_mean_and_signal_dependent_variance_eq19():
+    kappa = 50.0
+    g = noise.poisson(FLAT, kappa, seed=0)  # FLAT is 100
+    assert abs(g.mean() - 100) < 0.2  # E[g] = f
+    expected_var = 255 * 100 / kappa  # Var(g) = (L-1) f / kappa
+    assert abs(g.var() - (expected_var + 1 / 12)) / expected_var < 0.02
+
+
+def test_poisson_noise_depends_on_the_signal():
+    dark = noise.poisson(np.full((256, 256, 3), 20.0), 50, seed=1)
+    bright = noise.poisson(np.full((256, 256, 3), 200.0), 50, seed=1)
+    assert bright.std() > 2.5 * dark.std()  # std grows with sqrt(f)
+    assert np.all(noise.poisson(np.zeros((8, 8, 3)), 50, seed=2) == 0)
+
+
+def test_poisson_larger_kappa_is_weaker():
+    strong = noise.poisson(FLAT, 5, seed=3)
+    weak = noise.poisson(FLAT, 500, seed=3)
+    assert weak.std() < strong.std()
+    assert np.array_equal(noise.poisson(FLAT[:16, :16], 20, seed=4),
+                          noise.poisson(FLAT[:16, :16], 20, seed=4))

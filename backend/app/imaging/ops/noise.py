@@ -98,3 +98,18 @@ def gamma_speckle(rgb: np.ndarray, nu: float, seed: int | None = None) -> np.nda
     rng = np.random.default_rng(seed)
     s = rng.gamma(shape=nu, scale=1.0 / nu, size=rgb.shape[:2])
     return clip(round_half_up(rgb * s[..., None]))
+
+
+def poisson(rgb: np.ndarray, kappa: float, seed: int | None = None) -> np.ndarray:
+    """Eq. (19): photon-counting noise, signal dependent.
+
+    With the normalised intensity f_n = f / (L-1), the expected photon count
+    is lambda = kappa f_n. K ~ Poisson(lambda) is drawn for every pixel and
+    channel, and g = (L-1) K / kappa. Since Var(K) = E[K] = lambda,
+    E[g] = f and Var(g) = (L-1) f / kappa in 0-255 units: the noise grows
+    with the intensity, black stays black, and a larger kappa (more
+    photons) gives weaker noise.
+    """
+    rng = np.random.default_rng(seed)
+    k = rng.poisson(kappa * rgb / (L - 1))
+    return clip(round_half_up((L - 1) * k / kappa))
