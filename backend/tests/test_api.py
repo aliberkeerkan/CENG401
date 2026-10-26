@@ -321,8 +321,26 @@ def test_sharpen_and_denoise_through_api():
         {"type": "denoise_uniform", "params": {"size": 3}},
         {"type": "denoise_quantization", "params": {"sigma": 1.0}},
         {"type": "denoise_poisson", "params": {"sigma": 1.0}},
+        {"type": "denoise_gaussian", "params": {"noise_std": 15, "size": 3}},
+        {"type": "denoise_rayleigh", "params": {"noise_std": 10, "size": 5}},
+        {"type": "denoise_exponential", "params": {"noise_std": 12, "size": 3}},
+        {"type": "denoise_gamma", "params": {"size": 3}},
     ]
     for op in ops:
         r = client.post("/process", json={"image_id": image_id, "operations": [op]})
         assert r.status_code == 200, op["type"]
         assert decode(r).shape == (16, 16, 3)
+
+
+def test_denoise_additive_parameters_are_validated():
+    image_id = upload(png_bytes(np.zeros((8, 8, 3), dtype=np.uint8))).json()["image_id"]
+    bad = [
+        {"type": "denoise_gaussian", "params": {"noise_std": -1, "size": 3}},
+        {"type": "denoise_gaussian", "params": {"noise_std": 10, "size": 4}},   # even window
+        {"type": "denoise_rayleigh", "params": {"noise_std": 10, "size": 17}},  # too large
+        {"type": "denoise_exponential", "params": {"noise_std": 10, "size": 1}},  # too small
+        {"type": "denoise_gamma", "params": {"size": 2}},
+    ]
+    for op in bad:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 422, op

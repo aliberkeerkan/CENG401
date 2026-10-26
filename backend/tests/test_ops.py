@@ -564,3 +564,27 @@ def test_denoise_extras_clean_their_noise():
     assert np.array_equal(filters.denoise_poisson(flat, 1.0), flat)
     grain = noise.poisson(flat, kappa=20, seed=3)
     assert (filters.denoise_poisson(grain, 1.2) - flat).var() < (grain - flat).var()
+
+
+def test_denoise_additive_filters_clean_their_noise():
+    flat = np.full((20, 20, 3), 120.0)
+    rng = np.random.default_rng(4)
+    # Gaussian: local Wiener reduces the variance of additive noise
+    noisy = flat + rng.normal(0, 20, flat.shape)
+    out = filters.denoise_gaussian(noisy, noise_std=20, size=3)
+    assert (out - flat).var() < (noisy - flat).var()
+    # constant image is unchanged, and noise_std = 0 is the identity
+    assert np.array_equal(filters.denoise_gaussian(flat, 20, 3), flat)
+    assert np.array_equal(filters.denoise_gaussian(noisy, 0, 3),
+                          np.clip(np.floor(noisy + 0.5), 0, 255))
+    # Rayleigh / exponential: positive mean is subtracted before smoothing
+    noisy_r = flat + rng.rayleigh(scale=15, size=flat.shape)
+    out_r = filters.denoise_rayleigh(noisy_r, noise_std=15 * math.sqrt((4 - math.pi) / 2), size=3)
+    assert abs(out_r.mean() - 120) < abs(noisy_r.mean() - 120)
+    noisy_e = flat + rng.exponential(scale=18, size=flat.shape)
+    out_e = filters.denoise_exponential(noisy_e, noise_std=18, size=3)
+    assert abs(out_e.mean() - 120) < abs(noisy_e.mean() - 120)
+    # Gamma speckle: log-domain mean restores the flat level
+    speckle = flat * rng.gamma(shape=10, scale=0.1, size=flat.shape)
+    out_g = filters.denoise_gamma(speckle, 3)
+    assert (out_g - flat).var() < (speckle - flat).var()
