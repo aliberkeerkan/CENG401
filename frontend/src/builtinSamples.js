@@ -49,4 +49,25 @@ export const BUILTIN_SAMPLES = [
     label: "Diagram",
     hint: "Sharp edges · resize & crop",
   },
+  {
+    id: "line-railway",
+    url: "/samples/line-railway.jpg",
+    file: "line-railway.jpg",
+    label: "Railway tracks",
+    hint: "Two long straight rails · line detection",
+  },
+  {
+    id: "edge-butterfly",
+    url: "/samples/edge-butterfly.jpg",
+    file: "edge-butterfly.jpg",
+    label: "Butterfly",
+    hint: "Curved outlines · edge detection",
+  },
+  {
+    id: "corner-cube",
+    url: "/samples/corner-cube.jpg",
+    file: "corner-cube.jpg",
+    label: "Rubik's cube",
+    hint: "Many corners · corner detection",
+  },
 ];

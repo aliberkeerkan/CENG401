@@ -253,6 +253,26 @@ def test_noise_and_mean_parameters_are_validated():
         assert r.status_code == 422, op
 
 
+def test_line_detection_through_api():
+    arr = np.full((60, 80, 3), 120, dtype=np.uint8)
+    arr[28:33, :] = 240  # a bright band gives clean, detectable edges
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    op = {"type": "line_detection", "params": {"edge_threshold": 50, "vote_threshold": 0.3, "max_lines": 5}}
+    r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+    assert r.status_code == 200
+    assert decode(r).shape == (60, 80, 3)
+
+    bad = [
+        {"type": "line_detection", "params": {"edge_threshold": 0, "vote_threshold": 0.3, "max_lines": 5}},
+        {"type": "line_detection", "params": {"edge_threshold": 50, "vote_threshold": 1.0, "max_lines": 5}},
+        {"type": "line_detection", "params": {"edge_threshold": 50, "vote_threshold": 0.3, "max_lines": 0}},
+        {"type": "line_detection", "params": {"edge_threshold": 50, "vote_threshold": 0.3, "max_lines": 31}},
+    ]
+    for op in bad:
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 422, op
+
+
 def test_contrast_stretch_through_api():
     arr = np.array([[[50] * 3, [100] * 3, [150] * 3]], dtype=np.uint8)
     image_id = upload(png_bytes(arr)).json()["image_id"]

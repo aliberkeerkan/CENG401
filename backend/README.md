@@ -49,6 +49,7 @@ pytest
 | Frequency | `band_reject` (40) / `band_pass` (41) {c0, width: fractions of D_max, kind: ideal \| butterworth \| gaussian, n}, `wiener` (44) {noise_std}, `kalman` {q, r}: 1-D Kalman smoother on rows, then columns |
 | Noise | `salt_pepper_noise` {p_pepper, p_salt, seed}, `quantization_noise` {bits: 1–8}, `rayleigh_noise` {a, b, zero_mean, seed}, `uniform_noise` {a, b, seed}, `exponential_noise` (26) {a, zero_mean, seed}, `gamma_noise` (20)-(21) {nu, seed}, `poisson_noise` (19) {kappa, seed} |
 | Denoise | `denoise_salt_pepper` and `denoise_uniform` {size: odd, 3–15}; `denoise_poisson` and `denoise_quantization` {sigma} |
+| Advanced | `line_detection` {edge_threshold, vote_threshold: fraction of max(H, W), max_lines}: classic Hough transform, no ML or deep learning (Gaussian pre-smoothing, Sobel, non-maximum suppression, gradient-direction voting, only covered segments drawn). Edge and corner detection are placeholders in the frontend, not implemented yet |
 
 Limits are listed in `app/schemas.py` and on the `/docs` page.
 
@@ -77,6 +78,7 @@ app/
       filters.py     Gaussian blur (10), unsharp mask, mean filters (27)-(29), order statistics (31)-(34), alpha-trimmed mean (35), adaptive median (5.4.3), denoise helpers
       frequency.py   band-reject (40), band-pass (41), Wiener (44), Kalman smoother
       noise.py       salt-and-pepper (18), Poisson (19), gamma/speckle (20)-(21), quantization (22), Rayleigh (24), uniform (25), exponential (26)
+      detection.py   line detection (Sobel + Hough transform, no ML); edge and corner detection to be added
 tests/               unit and API tests
 ```
 

@@ -184,6 +184,20 @@ class KalmanParams(BaseModel):
     r: float = Field(gt=0, le=10000, description="Measurement noise variance r")
 
 
+class LineDetectionParams(BaseModel):
+    """Classic Hough-transform line detection (no ML or deep learning)."""
+
+    edge_threshold: float = Field(
+        ge=5, le=400,
+        description="Sobel gradient magnitude a pixel must reach to vote as an edge point",
+    )
+    vote_threshold: float = Field(
+        ge=0.05, le=0.95,
+        description="Votes a line needs, as a fraction of max(H, W)",
+    )
+    max_lines: int = Field(ge=1, le=30, description="Number of strongest lines to draw")
+
+
 class CropOp(BaseModel):
     type: Literal["crop"]
     params: CropParams
@@ -344,6 +358,11 @@ class DenoiseGammaOp(BaseModel):
     params: WindowParams
 
 
+class LineDetectionOp(BaseModel):
+    type: Literal["line_detection"]
+    params: LineDetectionParams
+
+
 class GrayscaleOp(BaseModel):
     type: Literal["grayscale"]
     params: EmptyParams | None = None
@@ -369,6 +388,7 @@ Operation = Annotated[
         BandRejectOp, BandPassOp, WienerOp, KalmanOp,
         DenoiseSaltPepperOp, DenoiseUniformOp, DenoiseQuantizationOp, DenoisePoissonOp,
         DenoiseGaussianOp, DenoiseRayleighOp, DenoiseExponentialOp, DenoiseGammaOp,
+        LineDetectionOp,
     ],
     Field(discriminator="type"),
 ]

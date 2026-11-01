@@ -588,3 +588,77 @@ def test_denoise_additive_filters_clean_their_noise():
     speckle = flat * rng.gamma(shape=10, scale=0.1, size=flat.shape)
     out_g = filters.denoise_gamma(speckle, 3)
     assert (out_g - flat).var() < (speckle - flat).var()
+
+
+# ---------- line detection (classic Sobel + Hough transform, no ML) ----------
+from app.imaging.ops import detection  # noqa: E402
+
+
+def test_hough_finds_a_known_horizontal_line():
+    # two full-width rows give two clean, parallel lines
+    edges = np.zeros((60, 80), dtype=bool)
+    edges[28, :] = True
+    edges[33, :] = True
+    lines = detection._hough_lines(edges, vote_threshold=0.5, max_lines=5)
+    assert len(lines) == 2
+    rhos = sorted(rho for rho, _theta in lines)
+    assert abs(rhos[0] - 28) < 1 and abs(rhos[1] - 33) < 1
+    for _rho, theta in lines:
+        # a horizontal line has a vertical normal: theta close to 90 degrees
+        assert abs(theta - np.pi / 2) < np.deg2rad(5)
+
+
+def test_hough_finds_a_known_vertical_line():
+    edges = np.zeros((60, 80), dtype=bool)
+    edges[:, 40] = True
+    lines = detection._hough_lines(edges, vote_threshold=0.5, max_lines=5)
+    assert len(lines) == 1
+    rho, theta = lines[0]
+    assert theta < np.deg2rad(5)  # vertical line: theta close to 0
+    assert abs(rho - 40) < 3
+
+
+def test_hough_returns_nothing_without_edges():
+    assert detection._hough_lines(np.zeros((20, 20), dtype=bool), 0.3, 5) == []
+
+
+def test_line_detection_draws_red_on_the_known_edge_and_dims_the_rest():
+    flat = np.full((60, 80, 3), 120.0)
+    flat[28:33, :] = 240.0  # a bright horizontal band -> two strong edges
+    out = detection.line_detection(flat, edge_threshold=50, vote_threshold=0.3, max_lines=5)
+    assert out.shape == flat.shape
+    assert out.min() >= 0 and out.max() <= 255
+    # a flat region away from the band is simply dimmed, not drawn on
+    assert abs(out[50, 40, 0] - 120 * 0.6) < 1
+    # at least one row near the detected edges is painted red (R high, G/B low)
+    band = out[26:35]
+    reddish = (band[..., 0] > 200) & (band[..., 1] < 80) & (band[..., 2] < 80)
+    assert reddish.any()
+
+
+def test_gradient_direction_voting_finds_a_diagonal_line():
+    # a step edge along x = y: the gradient points at 135 degrees
+    img = np.full((80, 80, 3), 40.0)
+    yy, xx = np.mgrid[:80, :80]
+    img[xx > yy] = 220.0
+    out = detection.line_detection(img, edge_threshold=50, vote_threshold=0.3, max_lines=3)
+    red = (out[..., 0] > 200) & (out[..., 1] < 80)
+    ys, xs = np.nonzero(red)
+    assert ys.size > 0
+    assert np.abs(ys - xs).mean() < 3  # the drawn pixels lie on x = y
+
+
+def test_line_detection_draws_only_the_covered_segment():
+    # a band across the left half only: no red on the right half
+    img = np.full((60, 120, 3), 120.0)
+    img[28:33, :60] = 240.0
+    out = detection.line_detection(img, edge_threshold=50, vote_threshold=0.2, max_lines=5)
+    red = (out[..., 0] > 200) & (out[..., 1] < 80)
+    assert red[:, :55].any()
+    assert not red[:, 75:].any()
+
+
+def test_line_detection_is_a_no_op_without_edges():
+    flat = np.full((20, 20, 3), 100.0)
+    out = detection.line_detection(flat, edge_threshold=200, vote_threshold=0.5, max_lines=5)
+    assert np.allclose(out, 60.0, atol=1)  # just dimmed to 60%, nothing drawn
