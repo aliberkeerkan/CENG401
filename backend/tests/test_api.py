@@ -257,20 +257,28 @@ def test_line_detection_through_api():
     arr = np.full((60, 80, 3), 120, dtype=np.uint8)
     arr[28:33, :] = 240  # a bright band gives clean, detectable edges
     image_id = upload(png_bytes(arr)).json()["image_id"]
-    op = {"type": "line_detection", "params": {"edge_threshold": 50, "vote_threshold": 0.3, "max_lines": 5}}
-    r = client.post("/process", json={"image_id": image_id, "operations": [op]})
-    assert r.status_code == 200
-    assert decode(r).shape == (60, 80, 3)
+    for method in ("masks", "sht", "pht", "lsd", "edlines", "hessian"):
+        for show in ("image", "response"):
+            op = {"type": "line_detection", "params": {"method": method, "show": show}}
+            r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+            assert r.status_code == 200, (method, show)
+            assert decode(r).shape == (60, 80, 3)
+    op = {"type": "line_detection", "params": {"method": "sht", "show": "hough"}}
+    assert client.post("/process", json={"image_id": image_id, "operations": [op]}).status_code == 200
 
     bad = [
-        {"type": "line_detection", "params": {"edge_threshold": 0, "vote_threshold": 0.3, "max_lines": 5}},
-        {"type": "line_detection", "params": {"edge_threshold": 50, "vote_threshold": 1.0, "max_lines": 5}},
-        {"type": "line_detection", "params": {"edge_threshold": 50, "vote_threshold": 0.3, "max_lines": 0}},
-        {"type": "line_detection", "params": {"edge_threshold": 50, "vote_threshold": 0.3, "max_lines": 31}},
+        {"method": "sht", "show": "hough", "canny_low": 200, "canny_high": 100},  # T_L >= T_H
+        {"method": "pht", "show": "hough"},  # Hough view only for SHT
+        {"method": "canny"},
+        {"method": "sht", "vote_threshold": 1.0},
+        {"method": "sht", "max_lines": 0},
+        {"method": "masks", "direction": "diagonal"},
+        {"method": "hessian", "polarity": "both"},
     ]
-    for op in bad:
+    for params in bad:
+        op = {"type": "line_detection", "params": params}
         r = client.post("/process", json={"image_id": image_id, "operations": [op]})
-        assert r.status_code == 422, op
+        assert r.status_code == 422, params
 
 
 def test_contrast_stretch_through_api():

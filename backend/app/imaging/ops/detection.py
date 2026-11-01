@@ -1,30 +1,62 @@
 """Advanced tools: classic feature detectors, no ML or deep learning.
 
-Only line detection is implemented here (Gonzalez & Woods Ch. 10: edge
-detection followed by a Hough transform). Edge and corner detection are
-left for teammates to add in this module, in the same hand-written style.
+Line detection offers six methods, chosen with `method`:
+
+  masks    Gonzalez & Woods line-detection masks (Sec. 10.2): four 3x3
+           kernels, one per direction, thresholded response.
+  sht      Standard Hough transform (G&W Sec. 10.2) on Canny edges:
+           rho = x cos(theta) + y sin(theta), accumulator, peaks -> lines.
+  pht      Progressive probabilistic Hough (Matas et al. 2000, OpenCV
+           HoughLinesP): votes from random edge points, returns segments.
+  lsd      Line Segment Detector (von Gioi et al. 2010, OpenCV): gradient
+           regions validated by the number of false alarms.
+  edlines  EDLines (Akinlar & Topal 2011, OpenCV contrib): Edge Drawing
+           chains, least-squares segments, NFA validation.
+  hessian  Steger's ridge detector: Hessian of the Gaussian-smoothed image,
+           line points where the derivative along the normal vanishes.
+
+Canny comes from OpenCV. The methods work on the luma of the image; the
+lines are drawn over the colour image (dimmed) or over what the detector
+sees (show="response"), or the Hough accumulator is shown (show="hough",
+SHT only). Edge and corner detection are left for teammates to add here.
 
 Inputs and outputs are float64 RGB arrays of shape (H, W, 3) in [0, 255].
 """
 
+import cv2
 import numpy as np
-from scipy.ndimage import binary_dilation as _dilate
 from scipy.ndimage import convolve as _convolve
+from scipy.ndimage import correlate as _correlate
 from scipy.ndimage import gaussian_filter as _gaussian
 from scipy.ndimage import maximum_filter as _max_filter
 
-from .basic import clip, luma, round_half_up
+from .basic import L, luma
+from .filters import gaussian_blur
+from .geometry import OperationError
 
 _SOBEL_X = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float64)
 _SOBEL_Y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float64)
 
-# Smoothing before differentiation, so texture and sensor noise do not
-# turn into edge points (the Gaussian step of the Canny detector).
-_PRESMOOTH_SIGMA = 1.2
-# Each edge point votes only for line angles this close to its own
-# gradient direction, instead of all 180.
-_ANGLE_WINDOW_DEG = 2
+# G&W line-detection masks. The image y axis points down, so the "+45"
+# mask (rising line, /) has its 2s on the anti-diagonal.
+LINE_MASKS = {
+    "horizontal": np.array([[-1, -1, -1], [2, 2, 2], [-1, -1, -1]], dtype=np.float64),
+    "plus45": np.array([[-1, -1, 2], [-1, 2, -1], [2, -1, -1]], dtype=np.float64),
+    "vertical": np.array([[-1, 2, -1], [-1, 2, -1], [-1, 2, -1]], dtype=np.float64),
+    "minus45": np.array([[2, -1, -1], [-1, 2, -1], [-1, -1, 2]], dtype=np.float64),
+}
+MASK_COLORS = {
+    "horizontal": (255, 64, 64),
+    "plus45": (80, 220, 100),
+    "vertical": (70, 160, 255),
+    "minus45": (255, 200, 40),
+}
+LINE_COLOR = (255, 40, 40)
+PEAK_COLOR = (60, 230, 90)
+DIM = 0.6  # the image under the drawn lines is dimmed to 60%
 
+
+# ---------- shared helpers ----------
 
 def sobel_gradients(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Horizontal and vertical Sobel responses (reflection border)."""
@@ -39,160 +71,246 @@ def sobel_magnitude(gray: np.ndarray) -> np.ndarray:
     return np.hypot(gx, gy)
 
 
-def _thin_edges(magnitude: np.ndarray, gx: np.ndarray, gy: np.ndarray) -> np.ndarray:
-    """Non-maximum suppression: keep a pixel only if its magnitude is the
-    largest along its gradient direction, so every edge is one pixel wide
-    and casts one set of votes instead of a thick band of them."""
-    angle = (np.rad2deg(np.arctan2(gy, gx)) + 180.0) % 180.0
-    sector = np.round(angle / 45.0).astype(int) % 4  # 0, 45, 90, 135 degrees
-    padded = np.pad(magnitude, 1, mode="edge")
-    h, w = magnitude.shape
-
-    def shifted(dy: int, dx: int) -> np.ndarray:
-        return padded[1 + dy:1 + dy + h, 1 + dx:1 + dx + w]
-
-    # neighbours along the gradient for each of the four sectors
-    steps = {0: (0, 1), 1: (1, 1), 2: (1, 0), 3: (1, -1)}
-    keep = np.zeros(magnitude.shape, dtype=bool)
-    for s, (dy, dx) in steps.items():
-        m = sector == s
-        keep |= m & (magnitude >= shifted(dy, dx)) & (magnitude >= shifted(-dy, -dx))
-    return keep
+def _to_u8(gray: np.ndarray) -> np.ndarray:
+    return np.clip(np.floor(gray + 0.5), 0, L - 1).astype(np.uint8)
 
 
-def _hough_lines(edges: np.ndarray, vote_threshold: float, max_lines: int,
-                 angles: np.ndarray | None = None) -> list[tuple[float, float]]:
-    """Classic Hough transform for straight lines rho = x cos(theta) + y sin(theta).
+def canny_edges(gray: np.ndarray, sigma: float, low: float, high: float) -> np.ndarray:
+    """Canny edge map (G&W Sec. 10.2): Gaussian smoothing with sigma (the
+    project's own kernel), then OpenCV's Canny: Sobel gradient with the
+    exact magnitude sqrt(gx^2 + gy^2), non-maximum suppression and
+    hysteresis thresholding with T_L = low, T_H = high."""
+    if sigma > 0:
+        gray = gaussian_blur(gray[..., None], sigma)[..., 0]
+    return cv2.Canny(_to_u8(gray), low, high, L2gradient=True) > 0
 
-    theta is stepped every degree over [0, 180). Without `angles` every edge
-    pixel votes for all 180 thetas. With `angles` (the gradient direction of
-    each edge pixel, in degrees) it votes only within a few degrees of it:
-    the gradient is normal to the line, so other angles are noise.
 
-    Bins with at least vote_threshold * max(H, W) votes that are also a local
-    maximum of the accumulator are candidates; the max_lines strongest are
-    kept, a few pixels and degrees apart.
+def _normalised(x: np.ndarray) -> np.ndarray:
+    top = float(x.max())
+    return x * ((L - 1) / top) if top > 0 else np.zeros_like(x)
+
+
+def _as_rgb_u8(gray: np.ndarray) -> np.ndarray:
+    return np.ascontiguousarray(np.repeat(_to_u8(gray)[..., None], 3, axis=2))
+
+
+def _thickness(h: int, w: int) -> int:
+    # about 3 px on a 1000 px image, never thinner than 2 px
+    return max(2, round(max(h, w) / 350))
+
+
+def _draw_segments(canvas: np.ndarray, segments: np.ndarray, color, thickness: int) -> None:
+    for x1, y1, x2, y2 in np.asarray(segments, dtype=np.float64).reshape(-1, 4):
+        cv2.line(canvas, (int(round(x1)), int(round(y1))), (int(round(x2)), int(round(y2))),
+                 color, thickness, cv2.LINE_AA)
+
+
+def _segment_lengths(segments: np.ndarray) -> np.ndarray:
+    s = np.asarray(segments, dtype=np.float64).reshape(-1, 4)
+    return np.hypot(s[:, 2] - s[:, 0], s[:, 3] - s[:, 1])
+
+
+# ---------- G&W line masks ----------
+
+def line_mask_responses(gray: np.ndarray) -> dict[str, np.ndarray]:
+    """R = sum_k w_k z_k for each of the four G&W masks (reflection border)."""
+    return {name: _correlate(gray, w, mode="mirror") for name, w in LINE_MASKS.items()}
+
+
+def _masks(gray, direction, polarity, threshold):
+    """Line pixels and their direction. Bright lines need R >= T, dark
+    lines -R >= T. With direction="all" each pixel takes the mask with
+    the largest response, as G&W suggest for finding the direction."""
+    sign = 1.0 if polarity == "bright" else -1.0
+    responses = {k: sign * r for k, r in line_mask_responses(gray).items()}
+    names = list(LINE_MASKS) if direction == "all" else [direction]
+    stack = np.stack([responses[n] for n in names])
+    best = stack.argmax(axis=0)
+    value = stack.max(axis=0)
+    return names, best, value, value >= threshold
+
+
+# ---------- standard Hough transform ----------
+
+def hough_accumulator(edges: np.ndarray):
+    """A(rho, theta) of G&W's normal representation rho = x cos(theta) + y sin(theta).
+
+    theta runs over -90 <= theta < 90 degrees in 1 degree steps, rho over
+    -D..D in 1 pixel steps (D = image diagonal). Every edge pixel adds one
+    vote to every (rho, theta) whose line passes through it.
     """
     h, w = edges.shape
     ys, xs = np.nonzero(edges)
-    if xs.size == 0:
-        return []
-
-    thetas = np.deg2rad(np.arange(0, 180, 1.0))
-    cos_t, sin_t = np.cos(thetas), np.sin(thetas)
+    thetas = np.deg2rad(np.arange(-90, 90, 1.0))
     diag = int(np.ceil(np.hypot(h, w)))
-    n_rho = 2 * diag + 1
-    acc = np.zeros((n_rho, thetas.size), dtype=np.int64)
+    acc = np.zeros((2 * diag + 1, thetas.size), dtype=np.int64)
+    if xs.size:
+        for j, t in enumerate(thetas):
+            rho = np.round(xs * np.cos(t) + ys * np.sin(t)).astype(np.int64) + diag
+            acc[:, j] = np.bincount(rho, minlength=acc.shape[0])
+    return acc, thetas, diag
 
-    def vote(theta_idx: np.ndarray | int, px: np.ndarray, py: np.ndarray) -> None:
-        rho = px * cos_t[theta_idx] + py * sin_t[theta_idx]
-        bins = np.clip(np.round(rho).astype(np.int64) + diag, 0, n_rho - 1)
-        np.add.at(acc, (bins, theta_idx), 1)
 
-    if angles is None:
-        for j in range(thetas.size):
-            vote(j, xs, ys)
-    else:
-        base = np.round(angles[ys, xs]).astype(np.int64)
-        for d in range(-_ANGLE_WINDOW_DEG, _ANGLE_WINDOW_DEG + 1):
-            vote((base + d) % 180, xs, ys)
-
+def hough_peaks(acc, thetas, diag, min_votes: int, max_lines: int):
+    """The max_lines strongest local maxima with at least min_votes votes,
+    at least a few pixels and 5 degrees apart: (rho, theta, votes)."""
     min_rho_gap = max(2.0, 0.02 * diag)
     min_theta_gap = np.deg2rad(5)
-    peaks = acc == _max_filter(acc, size=(2 * int(min_rho_gap) + 1, 5), mode="constant")
-    min_votes = max(1, int(vote_threshold * max(h, w)))
-    rows, cols = np.nonzero(peaks & (acc >= min_votes))
-    if rows.size == 0:
-        return []
+    local = acc == _max_filter(acc, size=(2 * int(min_rho_gap) + 1, 5), mode="constant")
+    rows, cols = np.nonzero(local & (acc >= max(1, min_votes)))
     order = np.argsort(-acc[rows, cols], kind="stable")
-
-    chosen: list[tuple[float, float]] = []
-    for idx in order:
-        rho, theta = float(rows[idx] - diag), float(thetas[cols[idx]])
-        if any(abs(rho - cr) < min_rho_gap and abs(theta - ct) < min_theta_gap
-               for cr, ct in chosen):
+    chosen = []
+    for i in order:
+        rho, theta = float(rows[i] - diag), float(thetas[cols[i]])
+        if any(abs(rho - r) < min_rho_gap and abs(theta - t) < min_theta_gap for r, t, _ in chosen):
             continue
-        chosen.append((rho, theta))
+        chosen.append((rho, theta, int(acc[rows[i], cols[i]])))
         if len(chosen) == max_lines:
             break
     return chosen
 
 
-def _line_segments(support: np.ndarray, rho: float, theta: float,
-                   min_length: int, max_gap: int) -> list[np.ndarray]:
-    """Walk along a Hough line and keep only the stretches that edge pixels
-    actually cover (short gaps allowed), instead of the infinite line."""
-    h, w = support.shape
-    diag = int(np.ceil(np.hypot(h, w)))
-    a, b = np.cos(theta), np.sin(theta)
-    t = np.arange(-diag, diag + 1)
-    xs = np.round(rho * a - t * b).astype(np.int64)
-    ys = np.round(rho * b + t * a).astype(np.int64)
-    inside = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
-    xs, ys = xs[inside], ys[inside]
-    if xs.size == 0:
-        return []
-    on = support[ys, xs]
-
-    segments, start, last = [], None, None
-    for i, hit in enumerate(on):
-        if not hit:
-            continue
-        if start is None:
-            start = last = i
-        elif i - last > max_gap + 1:
-            if last - start + 1 >= min_length:
-                segments.append(np.stack([ys[start:last + 1], xs[start:last + 1]], axis=1))
-            start = i
-        last = i
-    if start is not None and last - start + 1 >= min_length:
-        segments.append(np.stack([ys[start:last + 1], xs[start:last + 1]], axis=1))
-    return segments
+def _line_endpoints(rho: float, theta: float, h: int, w: int):
+    """Two points far outside the image on the line rho = x cos + y sin."""
+    x0, y0 = rho * np.cos(theta), rho * np.sin(theta)
+    dx, dy = -np.sin(theta), np.cos(theta)
+    far = 2.0 * np.hypot(h, w)
+    return x0 - far * dx, y0 - far * dy, x0 + far * dx, y0 + far * dy
 
 
-def _paint(canvas: np.ndarray, points: np.ndarray, color: np.ndarray, radius: int) -> None:
-    """Paints a disc of the given radius around every point."""
-    h, w = canvas.shape[:2]
-    for dy in range(-radius, radius + 1):
-        for dx in range(-radius, radius + 1):
-            if dy * dy + dx * dx > radius * radius:
-                continue
-            y, x = points[:, 0] + dy, points[:, 1] + dx
-            ok = (y >= 0) & (y < h) & (x >= 0) & (x < w)
-            canvas[y[ok], x[ok]] = color
+def _hough_image(acc, peaks, thetas, diag, h, w):
+    """The accumulator as an H x W image: theta left to right (-90..90),
+    rho top to bottom (-D..D), log(1 + A) for contrast, peaks circled."""
+    img = cv2.resize(_to_u8(_normalised(np.log1p(acc.astype(np.float64)))), (w, h),
+                     interpolation=cv2.INTER_AREA)
+    canvas = np.ascontiguousarray(np.repeat(img[..., None], 3, axis=2))
+    r = max(4, round(max(h, w) / 70))
+    for rho, theta, _ in peaks:
+        j = int(round(np.rad2deg(theta))) + 90
+        cx = int((j + 0.5) * w / thetas.size)
+        cy = int((rho + diag + 0.5) * h / acc.shape[0])
+        cv2.circle(canvas, (cx, cy), r, PEAK_COLOR, max(1, r // 3), cv2.LINE_AA)
+    return canvas
 
 
-def line_detection(rgb: np.ndarray, edge_threshold: float, vote_threshold: float,
-                   max_lines: int) -> np.ndarray:
-    """Straight-line detection with a Hough transform; no learned model.
+# ---------- Steger / Hessian ----------
 
-    1. Luma is smoothed with a Gaussian, then Sobel gives the gradient.
-    2. Non-maximum suppression thins edges to one pixel; pixels whose
-       magnitude is at least edge_threshold are edge points.
-    3. Each edge point votes in the Hough accumulator only near its own
-       gradient direction.
-    4. The max_lines strongest accumulator peaks above vote_threshold are
-       kept, and only the stretches of each line that edge pixels cover are
-       drawn, in red, over the image dimmed to 60%.
+def ridge_points(gray: np.ndarray, sigma: float, polarity: str, threshold: float):
+    """Steger's line points. With r = G_sigma * f and its derivatives,
+    the Hessian H = [[r_xx, r_xy], [r_xy, r_yy]] has its largest-magnitude
+    eigenvalue lambda across the line, with unit eigenvector n (the line
+    normal). Along n the profile peaks at offset
+
+        t = -(r_x n_x + r_y n_y) / (r_xx n_x^2 + 2 r_xy n_x n_y + r_yy n_y^2),
+
+    a pixel is a line point if that peak lies inside it (|t n_x|, |t n_y|
+    <= 1/2) and the scale-normalised strength sigma^2 |lambda| reaches the
+    threshold, with lambda < 0 for bright lines and > 0 for dark ones.
+    Returns (points, strength).
     """
-    gray = _gaussian(luma(rgb), _PRESMOOTH_SIGMA, mode="mirror")
-    gx, gy = sobel_gradients(gray)
-    magnitude = np.hypot(gx, gy)
-    edges = _thin_edges(magnitude, gx, gy) & (magnitude >= edge_threshold)
-    angles = (np.rad2deg(np.arctan2(gy, gx)) + 180.0) % 180.0
+    d = lambda oy, ox: _gaussian(gray, sigma, order=(oy, ox), mode="mirror")  # noqa: E731
+    rx, ry = d(0, 1), d(1, 0)
+    rxx, ryy, rxy = d(0, 2), d(2, 0), d(1, 1)
+    mean = (rxx + ryy) / 2
+    disc = np.sqrt(((rxx - ryy) / 2) ** 2 + rxy ** 2)
+    l1, l2 = mean + disc, mean - disc
+    lam = np.where(np.abs(l1) >= np.abs(l2), l1, l2)
+    # eigenvector of lam: (r_xy, lam - r_xx) or (lam - r_yy, r_xy), whichever is not ~0
+    ax, ay = rxy, lam - rxx
+    bx, by = lam - ryy, rxy
+    use_a = np.hypot(ax, ay) >= np.hypot(bx, by)
+    nx, ny = np.where(use_a, ax, bx), np.where(use_a, ay, by)
+    norm = np.hypot(nx, ny)
+    flat = norm < 1e-12
+    nx = np.where(flat, 1.0, nx / np.where(flat, 1.0, norm))
+    ny = np.where(flat, 0.0, ny / np.where(flat, 1.0, norm))
+    denom = rxx * nx * nx + 2 * rxy * nx * ny + ryy * ny * ny
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = -(rx * nx + ry * ny) / denom
+    strength = (-lam if polarity == "bright" else lam) * sigma * sigma
+    inside = (np.abs(t * nx) <= 0.5) & (np.abs(t * ny) <= 0.5)
+    return inside & (strength >= threshold) & np.isfinite(t), np.maximum(strength, 0)
 
-    lines = _hough_lines(edges, vote_threshold, int(max_lines), angles)
 
-    h, w = edges.shape
-    support = _dilate(edges, iterations=1)
-    min_length = max(15, int(0.05 * max(h, w)))
-    max_gap = max(4, int(0.01 * max(h, w)))
-    # about 5 px wide on a 1000 px image, never thinner than 3 px
-    radius = max(1, round(max(h, w) / 450))
+def _drop_short(points: np.ndarray, min_length: int) -> np.ndarray:
+    """Keeps connected curves of at least min_length pixels."""
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(points.astype(np.uint8), connectivity=8)
+    keep = np.zeros(n, dtype=bool)
+    keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= min_length
+    return keep[labels]
 
-    out = rgb * 0.6
-    red = np.array([255.0, 32.0, 32.0])
-    for rho, theta in lines:
-        for seg in _line_segments(support, rho, theta, min_length, max_gap):
-            _paint(out, seg, red, radius)
-    return clip(round_half_up(out))
+
+def _paint_points(canvas, points, color, thickness):
+    if thickness > 1:
+        points = cv2.dilate(points.astype(np.uint8), np.ones((thickness, thickness), np.uint8)) > 0
+    canvas[points] = color
+
+
+# ---------- the operation ----------
+
+def line_detection(rgb: np.ndarray, method: str = "sht", show: str = "image",
+                   sigma: float = 1.4, canny_low: float = 50, canny_high: float = 150,
+                   vote_threshold: float = 0.15, max_lines: int = 10,
+                   votes: int = 80, min_length: int = 40, max_gap: int = 10,
+                   direction: str = "all", polarity: str = "bright", threshold: float = 300,
+                   hessian_sigma: float = 2.0, ridge_threshold: float = 8.0) -> np.ndarray:
+    """Detects straight lines (or, for hessian, thin curvilinear lines) and
+    draws them. See the module docstring for the methods."""
+    gray = luma(rgb)
+    h, w = gray.shape
+    thick = _thickness(h, w)
+    if show == "hough" and method != "sht":
+        raise OperationError("The Hough space view is only available for the standard Hough transform.")
+
+    if method in ("sht", "pht"):
+        edges = canny_edges(gray, sigma, canny_low, canny_high)
+        response = edges * float(L - 1)
+    elif method == "masks":
+        names, best, value, hits = _masks(gray, direction, polarity, threshold)
+        response = _normalised(np.maximum(value, 0))
+    elif method == "hessian":
+        hits, strength = ridge_points(gray, hessian_sigma, polarity, ridge_threshold)
+        hits = _drop_short(hits, min_length)
+        response = _normalised(strength)
+    else:  # lsd, edlines: both start from the image gradient
+        response = _normalised(sobel_magnitude(gray))
+
+    if show == "response":
+        canvas = _as_rgb_u8(response)
+    elif show == "image":
+        canvas = np.ascontiguousarray(np.clip(np.floor(rgb * DIM + 0.5), 0, L - 1).astype(np.uint8))
+
+    if method == "sht":
+        acc, thetas, diag = hough_accumulator(edges)
+        peaks = hough_peaks(acc, thetas, diag, round(vote_threshold * max(h, w)), max_lines)
+        if show == "hough":
+            return _hough_image(acc, peaks, thetas, diag, h, w).astype(np.float64)
+        for rho, theta, _ in peaks:
+            _draw_segments(canvas, np.array(_line_endpoints(rho, theta, h, w)), LINE_COLOR, thick)
+    elif method == "pht":
+        segs = cv2.HoughLinesP(edges.astype(np.uint8) * 255, 1, np.pi / 180, int(votes),
+                               minLineLength=int(min_length), maxLineGap=int(max_gap))
+        if segs is not None:
+            _draw_segments(canvas, segs, LINE_COLOR, thick)
+    elif method in ("lsd", "edlines"):
+        u8 = _to_u8(gray)
+        if method == "lsd":
+            segs = cv2.createLineSegmentDetector(cv2.LSD_REFINE_STD).detect(u8)[0]
+        else:
+            ed = cv2.ximgproc.createEdgeDrawing()
+            ed.detectEdges(u8)
+            segs = ed.detectLines()
+        if segs is not None and len(segs):
+            segs = np.asarray(segs).reshape(-1, 4)
+            _draw_segments(canvas, segs[_segment_lengths(segs) >= min_length], LINE_COLOR, thick)
+    elif method == "masks":
+        if len(names) == 1:
+            _paint_points(canvas, hits, LINE_COLOR, thick - 1)
+        else:
+            for i, name in enumerate(names):
+                _paint_points(canvas, hits & (best == i), MASK_COLORS[name], thick - 1)
+    elif method == "hessian":
+        _paint_points(canvas, hits, LINE_COLOR, thick - 1)
+    else:
+        raise OperationError(f"Unknown line detection method: {method}")
+    return canvas.astype(np.float64)

@@ -590,75 +590,122 @@ def test_denoise_additive_filters_clean_their_noise():
     assert (out_g - flat).var() < (speckle - flat).var()
 
 
-# ---------- line detection (classic Sobel + Hough transform, no ML) ----------
+# ---------- line detection (masks, SHT, PHT, LSD, EDLines, Hessian) ----------
 from app.imaging.ops import detection  # noqa: E402
 
+# two bright 3 px lines on a dark background: rho = x cos(t) + y sin(t)
+LINES = [(150.0, np.deg2rad(30)), (-40.0, np.deg2rad(-60))]
 
-def test_hough_finds_a_known_horizontal_line():
-    # two full-width rows give two clean, parallel lines
+
+def _line_image(h=300, w=300, width=1.5, noise=0.0):
+    yy, xx = np.mgrid[0:h, 0:w]
+    img = np.full((h, w), 90.0)
+    for rho, t in LINES:
+        img[np.abs(xx * np.cos(t) + yy * np.sin(t) - rho) < width] = 220.0
+    img = img + np.random.default_rng(0).normal(0, noise, img.shape)
+    return np.repeat(np.clip(img, 0, 255)[..., None], 3, axis=2)
+
+
+def _red(out):
+    return (out[..., 0] > 200) & (out[..., 1] < 90) & (out[..., 2] < 90)
+
+
+def _distance_to_lines(ys, xs):
+    return np.min([np.abs(xs * np.cos(t) + ys * np.sin(t) - rho) for rho, t in LINES], axis=0)
+
+
+def test_gw_line_masks_respond_6_delta_on_a_one_pixel_line():
+    # one-pixel line of height d above a flat background: R = 2*3*d - 3*d - 3*d... on
+    # its own direction the centre row gives 2*3*(b+d) - 3*b - 3*b = 6d
+    img = np.full((9, 9), 50.0)
+    img[4, :] = 80.0
+    r = detection.line_mask_responses(img)
+    assert r["horizontal"][4, 4] == 6 * 30
+    assert abs(r["vertical"][4, 4]) < abs(r["horizontal"][4, 4])
+    diag = np.full((9, 9), 50.0)
+    diag[np.arange(9), 8 - np.arange(9)] = 80.0  # rising line, /
+    rd = detection.line_mask_responses(diag)
+    assert rd["plus45"][4, 4] == 6 * 30 and rd["minus45"][4, 4] < rd["plus45"][4, 4]
+
+
+def test_masks_mark_the_direction_of_each_line():
+    img = np.full((40, 40, 3), 60.0)
+    img[10, :] = 200.0   # horizontal
+    img[:, 30] = 200.0   # vertical
+    out = detection.line_detection(img, method="masks", direction="all", threshold=300)
+    assert tuple(out[10, 5]) == detection.MASK_COLORS["horizontal"]
+    assert tuple(out[25, 30]) == detection.MASK_COLORS["vertical"]
+    # dark polarity does not mark the bright lines themselves; it does mark
+    # their flanks, where the mask sees a dark row between bright ones
+    # (the double-line effect of the G&W masks)
+    dark = detection.line_detection(img, method="masks", polarity="dark", threshold=300)
+    colours = [np.array(c) for c in detection.MASK_COLORS.values()]
+    marked = lambda y, x: any((dark[y, x] == c).all() for c in colours)  # noqa: E731
+    assert not marked(10, 5) and not marked(25, 30)
+    assert marked(9, 5) and marked(11, 5)
+
+
+def test_hough_accumulator_counts_one_vote_per_edge_pixel():
     edges = np.zeros((60, 80), dtype=bool)
-    edges[28, :] = True
-    edges[33, :] = True
-    lines = detection._hough_lines(edges, vote_threshold=0.5, max_lines=5)
-    assert len(lines) == 2
-    rhos = sorted(rho for rho, _theta in lines)
-    assert abs(rhos[0] - 28) < 1 and abs(rhos[1] - 33) < 1
-    for _rho, theta in lines:
-        # a horizontal line has a vertical normal: theta close to 90 degrees
-        assert abs(theta - np.pi / 2) < np.deg2rad(5)
+    edges[30, :] = True  # horizontal line: theta = 90 deg is not in [-90, 90), -90 is
+    acc, thetas, diag = detection.hough_accumulator(edges)
+    assert acc.sum() == edges.sum() * thetas.size
+    j = int(np.argmin(np.abs(thetas - np.deg2rad(-90))))
+    assert acc[-30 + diag, j] == 80  # rho = y sin(-90) = -30, all 80 pixels
 
 
-def test_hough_finds_a_known_vertical_line():
-    edges = np.zeros((60, 80), dtype=bool)
-    edges[:, 40] = True
-    lines = detection._hough_lines(edges, vote_threshold=0.5, max_lines=5)
-    assert len(lines) == 1
-    rho, theta = lines[0]
-    assert theta < np.deg2rad(5)  # vertical line: theta close to 0
-    assert abs(rho - 40) < 3
+def test_sht_finds_known_lines_in_noise():
+    for noise in (0, 15):
+        edges = detection.canny_edges(_line_image(noise=noise)[..., 0], 1.4, 50, 150)
+        acc, thetas, diag = detection.hough_accumulator(edges)
+        peaks = detection.hough_peaks(acc, thetas, diag, 75, 4)
+        for rho, t in LINES:
+            # each thick line gives two parallel edges, about 2 px either side
+            assert any(abs(r - rho) <= 4 and abs(th - t) <= np.deg2rad(2) for r, th, _ in peaks), noise
 
 
-def test_hough_returns_nothing_without_edges():
-    assert detection._hough_lines(np.zeros((20, 20), dtype=bool), 0.3, 5) == []
+def test_sht_hough_view_and_drawn_lines():
+    img = _line_image()
+    hough = detection.line_detection(img, method="sht", show="hough", vote_threshold=0.25)
+    assert hough.shape == img.shape
+    assert ((hough[..., 1] > 200) & (hough[..., 0] < 100)).any()  # peaks circled in green
+    out = detection.line_detection(img, method="sht", vote_threshold=0.25, max_lines=4)
+    ys, xs = np.nonzero(_red(out))
+    assert ys.size and np.mean(_distance_to_lines(ys, xs) < 6) > 0.95
+    with pytest.raises(geometry.OperationError):
+        detection.line_detection(img, method="pht", show="hough")
 
 
-def test_line_detection_draws_red_on_the_known_edge_and_dims_the_rest():
-    flat = np.full((60, 80, 3), 120.0)
-    flat[28:33, :] = 240.0  # a bright horizontal band -> two strong edges
-    out = detection.line_detection(flat, edge_threshold=50, vote_threshold=0.3, max_lines=5)
-    assert out.shape == flat.shape
-    assert out.min() >= 0 and out.max() <= 255
-    # a flat region away from the band is simply dimmed, not drawn on
-    assert abs(out[50, 40, 0] - 120 * 0.6) < 1
-    # at least one row near the detected edges is painted red (R high, G/B low)
-    band = out[26:35]
-    reddish = (band[..., 0] > 200) & (band[..., 1] < 80) & (band[..., 2] < 80)
-    assert reddish.any()
+@pytest.mark.parametrize("method", ["pht", "lsd", "edlines"])
+def test_segment_methods_draw_on_the_known_lines(method):
+    img = _line_image(noise=8)
+    out = detection.line_detection(img, method=method, votes=60, min_length=40, max_gap=10)
+    ys, xs = np.nonzero(_red(out))
+    assert ys.size > 200
+    assert np.mean(_distance_to_lines(ys, xs) < 6) > 0.95
+    # the same call gives the same image (/process and /export must agree)
+    assert np.array_equal(out, detection.line_detection(img, method=method, votes=60, min_length=40, max_gap=10))
 
 
-def test_gradient_direction_voting_finds_a_diagonal_line():
-    # a step edge along x = y: the gradient points at 135 degrees
-    img = np.full((80, 80, 3), 40.0)
-    yy, xx = np.mgrid[:80, :80]
-    img[xx > yy] = 220.0
-    out = detection.line_detection(img, edge_threshold=50, vote_threshold=0.3, max_lines=3)
-    red = (out[..., 0] > 200) & (out[..., 1] < 80)
-    ys, xs = np.nonzero(red)
-    assert ys.size > 0
-    assert np.abs(ys - xs).mean() < 3  # the drawn pixels lie on x = y
+def test_hessian_line_points_lie_on_the_line_centre():
+    img = _line_image(width=2.0)[..., 0]
+    points, _ = detection.ridge_points(img, 2.0, "bright", 4.0)
+    ys, xs = np.nonzero(points)
+    assert ys.size > 300
+    assert np.mean(_distance_to_lines(ys, xs) <= 1.0) > 0.9  # sub-pixel test keeps the centre
+    # a dark line on a bright background gives the same points
+    dark, _ = detection.ridge_points(255 - img, 2.0, "dark", 4.0)
+    assert (points & dark).sum() / (points | dark).sum() > 0.98
+    # looking for dark lines finds almost nothing, and nothing on the bright
+    # lines' centres (only a few points at the crossing and the border)
+    none, _ = detection.ridge_points(img, 2.0, "dark", 4.0)
+    assert none.sum() < 0.1 * points.sum()
+    ny, nx = np.nonzero(none)
+    assert not (_distance_to_lines(ny, nx) <= 0.5).any()
 
 
-def test_line_detection_draws_only_the_covered_segment():
-    # a band across the left half only: no red on the right half
-    img = np.full((60, 120, 3), 120.0)
-    img[28:33, :60] = 240.0
-    out = detection.line_detection(img, edge_threshold=50, vote_threshold=0.2, max_lines=5)
-    red = (out[..., 0] > 200) & (out[..., 1] < 80)
-    assert red[:, :55].any()
-    assert not red[:, 75:].any()
-
-
-def test_line_detection_is_a_no_op_without_edges():
-    flat = np.full((20, 20, 3), 100.0)
-    out = detection.line_detection(flat, edge_threshold=200, vote_threshold=0.5, max_lines=5)
-    assert np.allclose(out, 60.0, atol=1)  # just dimmed to 60%, nothing drawn
+def test_line_detection_keeps_the_image_dimmed_where_nothing_is_found():
+    flat = np.full((40, 50, 3), 100.0)
+    for m in ("masks", "sht", "pht", "lsd", "edlines", "hessian"):
+        out = detection.line_detection(flat, method=m)
+        assert out.shape == flat.shape and np.allclose(out, 60.0), m

@@ -226,13 +226,22 @@ const TOOLS = {
     describe: "Speckle is multiplicative (g = f·S). Averaging in the log domain turns it additive; exp brings the levels back. This is the geometric-mean core.",
   },
   line_detection: {
-    label: "Line detection", eq: "LD", heavy: true, backendOnly: true,
+    label: "Line detection", heavy: true, backendOnly: true,
+    // each slider belongs to the methods listed in `methods`
     sliders: [
-      { key: "edge_threshold", min: 10, max: 300, step: 5, name: "Edge threshold" },
-      { key: "vote_threshold", min: 0.05, max: 0.9, step: 0.01, name: "Vote threshold (× max dimension)" },
-      { key: "max_lines", min: 1, max: 30, step: 1, name: "Lines to draw" },
+      { key: "threshold", min: 0, max: 1530, step: 10, name: "T (mask response)", methods: ["masks"] },
+      { key: "sigma", min: 0, max: 4, step: 0.1, name: "σ (Gaussian before Canny)", methods: ["sht", "pht"] },
+      { key: "canny_low", min: 0, max: 495, step: 5, name: "T_L (Canny low)", methods: ["sht", "pht"] },
+      { key: "canny_high", min: 5, max: 500, step: 5, name: "T_H (Canny high)", methods: ["sht", "pht"] },
+      { key: "vote_threshold", min: 0.05, max: 0.9, step: 0.01, name: "Votes needed (× max(W, H))", methods: ["sht"] },
+      { key: "max_lines", min: 1, max: 50, step: 1, name: "Lines to draw", methods: ["sht"] },
+      { key: "votes", min: 5, max: 500, step: 5, name: "Votes needed", methods: ["pht"] },
+      { key: "max_gap", min: 0, max: 100, step: 1, name: "Max gap (px)", methods: ["pht"] },
+      { key: "hessian_sigma", min: 0.5, max: 8, step: 0.1, name: "σ (about the line half-width)", methods: ["hessian"] },
+      { key: "ridge_threshold", min: 0.5, max: 60, step: 0.5, name: "T (σ²|λ|)", methods: ["hessian"] },
+      { key: "min_length", min: 5, max: 400, step: 5, name: "Min length (px)", methods: ["pht", "lsd", "edlines", "hessian"] },
     ],
-    describe: "Classic Hough transform, no ML or deep learning. The image is smoothed, Sobel finds edges and thins them to one pixel; each edge pixel votes only for lines along its own edge direction. Only the parts of the strongest lines that edges actually cover are drawn in red.",
+    describe: "Classic line detectors, no machine learning. The method works on the gray levels; the lines are drawn in red over the dimmed colour image, or over what the detector sees.",
   },
   edge_detection: {
     label: "Edge detection", comingSoon: true,
@@ -345,6 +354,43 @@ const ICONS = {
   ),
 };
 
+// Line detection methods: name in the menu, what the response view shows,
+// and a short explanation under the menu.
+const LINE_METHODS = {
+  masks: {
+    label: "G&W line masks", short: "masks", response: "Mask response",
+    hint: "Four 3×3 masks from Gonzalez–Woods, one per direction. A pixel is on a line if its mask response R reaches T. With all directions, the colour shows which mask won.",
+  },
+  sht: {
+    label: "Standard Hough (SHT)", short: "SHT", response: "Canny edges",
+    hint: "Every Canny edge pixel votes for all lines through it in (ρ, θ) space; the strongest peaks are drawn as infinite lines. The Hough space view shows the votes.",
+  },
+  pht: {
+    label: "Probabilistic Hough (PHT)", short: "PHT", response: "Canny edges",
+    hint: "OpenCV's progressive probabilistic Hough: random edge points vote, and only the segments the edges cover are returned. The classic lane-detection method.",
+  },
+  lsd: {
+    label: "Line Segment Detector (LSD)", short: "LSD", response: "Gradient magnitude",
+    hint: "OpenCV's LSD: grows regions of pixels whose gradient has the same direction and keeps only segments that are unlikely to occur by chance (NFA ≤ 1). Needs no thresholds.",
+  },
+  edlines: {
+    label: "EDLines", short: "EDLines", response: "Gradient magnitude",
+    hint: "OpenCV contrib's EDLines: links edge chains from anchor points, fits segments by least squares and validates them like LSD. Fast; used in robotics and SLAM.",
+  },
+  hessian: {
+    label: "Hessian ridges (Steger)", short: "Hessian", response: "Ridge strength",
+    hint: "Steger's method: the Hessian of the smoothed image finds thin bright or dark lines, curved ones too, at their sub-pixel centre. Set σ to about the line half-width.",
+  },
+};
+
+// G&W masks as TeX matrices; y points down, so +45° (/) has 2s on the anti-diagonal
+const LINE_MASKS_TEX = {
+  horizontal: "-1&-1&-1\\\\ 2&2&2\\\\ -1&-1&-1",
+  vertical: "-1&2&-1\\\\ -1&2&-1\\\\ -1&2&-1",
+  plus45: "-1&-1&2\\\\ -1&2&-1\\\\ 2&-1&-1",
+  minus45: "2&-1&-1\\\\ -1&2&-1\\\\ -1&-1&2",
+};
+
 // tools not implemented in imageOps.js: preview comes from the backend and
 // the tool is disabled while the backend is offline
 const BACKEND_ONLY = new Set(
@@ -438,7 +484,13 @@ function defaultParams(tool, img) {
     case "denoise_exponential": return { noise_std: 15, size: 3 };
     case "denoise_poisson":
     case "denoise_quantization": return { sigma: 1 };
-    case "line_detection": return { edge_threshold: 60, vote_threshold: 0.15, max_lines: 12 };
+    case "line_detection": return {
+      method: "sht", show: "image",
+      sigma: 1.4, canny_low: 50, canny_high: 150, vote_threshold: 0.15, max_lines: 10,
+      votes: 80, max_gap: 10, min_length: 40,
+      direction: "all", polarity: "bright", threshold: 300,
+      hessian_sigma: 2, ridge_threshold: 8,
+    };
     default: return {};
   }
 }
@@ -600,8 +652,32 @@ function formulaTex(tool, params, img) {
     case "denoise_gamma":
       return `\\begin{aligned} \\hat{f}&=\\exp\\!\\Bigl(\\frac{1}{mn}\\sum_{S_{xy}}\\ln\\bigl(g+\\varepsilon\\bigr)\\Bigr)\\\\ S_{xy}&=${win} \\end{aligned}`;
     case "line_detection": {
-      const minVotes = Math.round(params.vote_threshold * Math.max(W, H));
-      return `\\begin{aligned} \\rho&=x\\cos\\theta+y\\sin\\theta,\\quad \\theta\\approx\\angle\\nabla f\\pm2^{\\circ}\\\\ \\text{edge if}\\;&|\\nabla(f\\ast G_{1.2})|\\ge ${fmt(params.edge_threshold, 0)}\\\\ \\text{line if votes}\\;&\\ge ${fmt(params.vote_threshold, 2)}\\cdot\\max(W,H)=${minVotes} \\end{aligned}`;
+      const canny = `\\text{edges}&=\\mathrm{Canny}\\bigl(G_{${fmt(params.sigma, 1)}}*f,\\;T_L=${params.canny_low},\\;T_H=${params.canny_high}\\bigr)`;
+      switch (params.method) {
+        case "masks": {
+          const sign = params.polarity === "dark" ? "-" : "";
+          const w = params.direction === "all"
+            ? `&\\text{4 masks; the largest } ${sign}R \\text{ wins}`
+            : `w&=\\begin{bmatrix}${LINE_MASKS_TEX[params.direction]}\\end{bmatrix}`;
+          return `\\begin{aligned} R&=\\sum_{k=1}^{9} w_k z_k,\\quad \\text{line if } ${sign}R\\ge T=${params.threshold}\\\\ ${w} \\end{aligned}`;
+        }
+        case "sht": {
+          const minVotes = Math.round(params.vote_threshold * Math.max(W, H));
+          return `\\begin{aligned} \\rho&=x\\cos\\theta+y\\sin\\theta,\\quad -90^{\\circ}\\le\\theta<90^{\\circ}\\\\ A(\\rho,\\theta)&\\ge ${minVotes}\\;\\text{votes, up to ${params.max_lines} peaks}\\\\ ${canny} \\end{aligned}`;
+        }
+        case "pht":
+          return `\\begin{aligned} \\rho&=x\\cos\\theta+y\\sin\\theta,\\quad \\text{random edge points vote}\\\\ A&\\ge ${params.votes},\\;\\ell\\ge ${params.min_length},\\;\\text{gap}\\le ${params.max_gap}\\;\\text{px}\\\\ ${canny} \\end{aligned}`;
+        case "lsd":
+          return `\\begin{aligned} \\theta&=\\arctan\\bigl(g_x/(-g_y)\\bigr),\\quad \\tau=22.5^{\\circ},\\; p=\\tau/\\pi\\\\ \\mathrm{NFA}&=(NM)^{5/2}\\,\\gamma\\sum_{j=k}^{n}\\binom{n}{j}p^{j}(1-p)^{n-j}\\le 1\\\\ \\ell&\\ge ${params.min_length}\\;\\text{px} \\end{aligned}`;
+        case "edlines":
+          return `\\begin{aligned} &\\text{anchors: peaks of } |\\nabla f|,\\ \\text{linked into chains}\\\\ &\\min_{a,b}\\textstyle\\sum_i (y_i-a x_i-b)^2,\\ \\text{error}\\le 1\\,\\text{px}\\\\ &\\mathrm{NFA}\\le 1,\\quad \\ell\\ge ${params.min_length}\\;\\text{px} \\end{aligned}`;
+        case "hessian": {
+          const cmp = params.polarity === "dark" ? "\\lambda>0" : "\\lambda<0";
+          return `\\begin{aligned} H&=\\begin{bmatrix}r_{xx}&r_{xy}\\\\ r_{xy}&r_{yy}\\end{bmatrix},\\quad r=G_{${fmt(params.hessian_sigma, 1)}}*f\\\\ t&=-\\frac{r_x n_x+r_y n_y}{r_{xx}n_x^2+2r_{xy}n_xn_y+r_{yy}n_y^2}\\\\ |t\\,n_x|,|t\\,n_y|&\\le\\tfrac12,\\; ${cmp},\\; \\sigma^2|\\lambda|\\ge ${params.ridge_threshold} \\end{aligned}`;
+        }
+        default:
+          return null;
+      }
     }
     default:
       return null;
@@ -821,7 +897,7 @@ function opLabel(op) {
     case "denoise_rayleigh": return `Remove Rayleigh, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
     case "denoise_exponential": return `Remove exponential, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
     case "denoise_gamma": return `Remove Gamma, ${p.size}×${p.size}`;
-    case "line_detection": return `Line detection, threshold ${fmt(p.edge_threshold, 0)}, votes ≥ ${fmt(p.vote_threshold, 2)}×max(W, H), up to ${p.max_lines} lines`;
+    case "line_detection": return `Line detection (${LINE_METHODS[p.method]?.short || p.method})${p.show === "hough" ? ", Hough space" : ""}`;
     default: return op.type;
   }
 }
@@ -890,6 +966,10 @@ function ToolControls({ tool, params, setParams, img }) {
       const other = key === "p_pepper" ? "p_salt" : "p_pepper";
       p[key] = Math.min(value, 1 - params[other]);
     }
+    if (tool === "line_detection") {
+      if (key === "canny_low") p.canny_low = Math.min(value, params.canny_high - 5);
+      if (key === "canny_high") p.canny_high = Math.max(value, params.canny_low + 5);
+    }
     if (tool === "alpha_trimmed_mean") {
       p.d = Math.min(p.d, p.size * p.size - 1);
     }
@@ -911,6 +991,54 @@ function ToolControls({ tool, params, setParams, img }) {
 
   return (
     <>
+      {tool === "line_detection" && (
+        <>
+          <label className="select inline">
+            <span>Method</span>
+            <select value={params.method}
+              onChange={(e) => {
+                const method = e.target.value;
+                // the Hough space exists only for the standard Hough transform
+                setParams({ ...params, method, show: params.show === "hough" && method !== "sht" ? "image" : params.show });
+              }}>
+              {Object.entries(LINE_METHODS).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
+            </select>
+          </label>
+          <p className="hint">{LINE_METHODS[params.method].hint}</p>
+          <label className="select inline">
+            <span>Show</span>
+            <select value={params.show} onChange={(e) => setParams({ ...params, show: e.target.value })}>
+              <option value="image">Lines on the image</option>
+              <option value="response">Lines on: {LINE_METHODS[params.method].response.toLowerCase()}</option>
+              {params.method === "sht" && <option value="hough">Hough space (ρ, θ)</option>}
+            </select>
+          </label>
+          {params.show === "hough" && (
+            <p className="hint">θ runs left to right from −90° to 90°, ρ top to bottom from −D to D. Green circles mark the lines found.</p>
+          )}
+          {params.method === "masks" && (
+            <label className="select inline">
+              <span>Direction</span>
+              <select value={params.direction} onChange={(e) => setParams({ ...params, direction: e.target.value })}>
+                <option value="all">All four (colour = direction)</option>
+                <option value="horizontal">Horizontal</option>
+                <option value="vertical">Vertical</option>
+                <option value="plus45">+45° (/)</option>
+                <option value="minus45">−45° (\)</option>
+              </select>
+            </label>
+          )}
+          {(params.method === "masks" || params.method === "hessian") && (
+            <label className="select inline">
+              <span>Lines are</span>
+              <select value={params.polarity} onChange={(e) => setParams({ ...params, polarity: e.target.value })}>
+                <option value="bright">Brighter than the background</option>
+                <option value="dark">Darker than the background</option>
+              </select>
+            </label>
+          )}
+        </>
+      )}
       {(tool === "band_reject" || tool === "band_pass") && (
         <label className="select inline">
           <span>Transfer function (Table 4.7)</span>
@@ -932,6 +1060,7 @@ function ToolControls({ tool, params, setParams, img }) {
       )}
       {t.sliders.map((s) => {
         if (s.key === "n" && params.kind !== "butterworth") return null;
+        if (s.methods && !s.methods.includes(params.method)) return null;
         // with zero_mean on, the mean a + √(πb/4) is subtracted, so a has
         // no effect at all — disable the slider and say why
         const disabled = tool === "rayleigh_noise" && s.key === "a" && params.zero_mean;

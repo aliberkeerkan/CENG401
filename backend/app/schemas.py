@@ -185,17 +185,44 @@ class KalmanParams(BaseModel):
 
 
 class LineDetectionParams(BaseModel):
-    """Classic Hough-transform line detection (no ML or deep learning)."""
+    """Line detection, classic methods only (no ML or deep learning).
 
-    edge_threshold: float = Field(
-        ge=5, le=400,
-        description="Sobel gradient magnitude a pixel must reach to vote as an edge point",
+    Every field has a default; each method reads only its own fields.
+    """
+
+    method: Literal["masks", "sht", "pht", "lsd", "edlines", "hessian"] = "sht"
+    show: Literal["image", "response", "hough"] = Field(
+        default="image",
+        description="Lines over the image, over what the detector sees, or the Hough accumulator (SHT only)",
     )
-    vote_threshold: float = Field(
-        ge=0.05, le=0.95,
-        description="Votes a line needs, as a fraction of max(H, W)",
-    )
-    max_lines: int = Field(ge=1, le=30, description="Number of strongest lines to draw")
+    # Canny edge map for SHT and PHT
+    sigma: float = Field(default=1.4, ge=0, le=5, description="Gaussian sigma before Canny")
+    canny_low: float = Field(default=50, ge=0, le=1000, description="Canny low threshold T_L")
+    canny_high: float = Field(default=150, ge=1, le=1000, description="Canny high threshold T_H")
+    # SHT
+    vote_threshold: float = Field(default=0.15, ge=0.02, le=0.95, description="Votes a line needs, as a fraction of max(H, W)")
+    max_lines: int = Field(default=10, ge=1, le=50, description="Strongest lines to draw")
+    # PHT
+    votes: int = Field(default=80, ge=1, le=2000, description="Accumulator threshold of the probabilistic Hough")
+    max_gap: int = Field(default=10, ge=0, le=500, description="Largest gap joined inside one segment, px")
+    # PHT, LSD, EDLines, Hessian
+    min_length: int = Field(default=40, ge=1, le=4000, description="Shortest segment or curve kept, px")
+    # G&W masks
+    direction: Literal["all", "horizontal", "vertical", "plus45", "minus45"] = "all"
+    threshold: float = Field(default=300, ge=0, le=1530, description="Mask response threshold T")
+    # masks and Hessian
+    polarity: Literal["bright", "dark"] = "bright"
+    # Hessian (Steger)
+    hessian_sigma: float = Field(default=2.0, ge=0.5, le=10, description="Gaussian scale sigma of the Hessian")
+    ridge_threshold: float = Field(default=8.0, ge=0, le=500, description="Threshold on sigma^2 |lambda|")
+
+    @model_validator(mode="after")
+    def consistent(self):
+        if self.canny_low >= self.canny_high:
+            raise ValueError("Canny T_L must be smaller than T_H.")
+        if self.show == "hough" and self.method != "sht":
+            raise ValueError("The Hough space view is only available for the standard Hough transform.")
+        return self
 
 
 class CropOp(BaseModel):
