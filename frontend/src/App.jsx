@@ -225,6 +225,23 @@ const TOOLS = {
     sliders: [{ key: "size", min: 3, max: 15, step: 2, name: "Window size" }],
     describe: "Speckle is multiplicative (g = f·S). Averaging in the log domain turns it additive; exp brings the levels back. This is the geometric-mean core.",
   },
+  line_detection: {
+    label: "Line detection", eq: "LD", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "edge_threshold", min: 10, max: 300, step: 5, name: "Edge threshold" },
+      { key: "vote_threshold", min: 0.05, max: 0.9, step: 0.01, name: "Vote threshold (× max dimension)" },
+      { key: "max_lines", min: 1, max: 30, step: 1, name: "Lines to draw" },
+    ],
+    describe: "Classic Hough transform, no ML or deep learning. The image is smoothed, Sobel finds edges and thins them to one pixel; each edge pixel votes only for lines along its own edge direction. Only the parts of the strongest lines that edges actually cover are drawn in red.",
+  },
+  edge_detection: {
+    label: "Edge detection", comingSoon: true,
+    describe: "Not implemented yet.",
+  },
+  corner_detection: {
+    label: "Corner detection", comingSoon: true,
+    describe: "Not implemented yet.",
+  },
 };
 
 // The tools panel first lists these groups (the plan's feature groups,
@@ -256,6 +273,10 @@ const CATEGORIES = [
     id: "denoise", label: "Denoise",
     tools: ["denoise_salt_pepper", "denoise_poisson", "denoise_quantization", "denoise_uniform",
       "denoise_gaussian", "denoise_rayleigh", "denoise_exponential", "denoise_gamma"],
+  },
+  {
+    id: "advanced", label: "Advanced tools",
+    tools: ["line_detection", "edge_detection", "corner_detection"],
   },
 ];
 
@@ -297,6 +318,14 @@ const ICONS = {
     <svg {...svgProps}>
       <path d="M4 10h12M10 4v12" />
       <circle cx="10" cy="10" r="6.5" />
+    </svg>
+  ),
+  // a line through two corner points
+  advanced: (
+    <svg {...svgProps}>
+      <path d="M3.5 16.5L16.5 3.5" />
+      <circle cx="3.5" cy="16.5" r="1.8" fill="var(--panel)" />
+      <circle cx="16.5" cy="3.5" r="1.8" fill="var(--panel)" />
     </svg>
   ),
   menu: (
@@ -362,6 +391,7 @@ const PREVIEW_ON_OPEN = new Set([
   "band_reject", "band_pass", "wiener", "kalman",
   "denoise_salt_pepper", "denoise_poisson", "denoise_quantization", "denoise_uniform",
   "denoise_gaussian", "denoise_rayleigh", "denoise_exponential", "denoise_gamma",
+  "line_detection",
 ]);
 
 function defaultParams(tool, img) {
@@ -408,6 +438,7 @@ function defaultParams(tool, img) {
     case "denoise_exponential": return { noise_std: 15, size: 3 };
     case "denoise_poisson":
     case "denoise_quantization": return { sigma: 1 };
+    case "line_detection": return { edge_threshold: 60, vote_threshold: 0.15, max_lines: 12 };
     default: return {};
   }
 }
@@ -568,6 +599,10 @@ function formulaTex(tool, params, img) {
       return `\\begin{aligned} g'&=g-\\sigma_\\eta\\\\ \\hat{f}&=\\mathrm{Wiener}(g',\\,\\sigma_\\eta),\\; S_{xy}=${win} \\end{aligned}`;
     case "denoise_gamma":
       return `\\begin{aligned} \\hat{f}&=\\exp\\!\\Bigl(\\frac{1}{mn}\\sum_{S_{xy}}\\ln\\bigl(g+\\varepsilon\\bigr)\\Bigr)\\\\ S_{xy}&=${win} \\end{aligned}`;
+    case "line_detection": {
+      const minVotes = Math.round(params.vote_threshold * Math.max(W, H));
+      return `\\begin{aligned} \\rho&=x\\cos\\theta+y\\sin\\theta,\\quad \\theta\\approx\\angle\\nabla f\\pm2^{\\circ}\\\\ \\text{edge if}\\;&|\\nabla(f\\ast G_{1.2})|\\ge ${fmt(params.edge_threshold, 0)}\\\\ \\text{line if votes}\\;&\\ge ${fmt(params.vote_threshold, 2)}\\cdot\\max(W,H)=${minVotes} \\end{aligned}`;
+    }
     default:
       return null;
   }
@@ -786,6 +821,7 @@ function opLabel(op) {
     case "denoise_rayleigh": return `Remove Rayleigh, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
     case "denoise_exponential": return `Remove exponential, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
     case "denoise_gamma": return `Remove Gamma, ${p.size}×${p.size}`;
+    case "line_detection": return `Line detection, threshold ${fmt(p.edge_threshold, 0)}, votes ≥ ${fmt(p.vote_threshold, 2)}×max(W, H), up to ${p.max_lines} lines`;
     default: return op.type;
   }
 }
@@ -1325,13 +1361,14 @@ export default function App() {
                       {cat.tools.map((k) => {
                         const v = TOOLS[k];
                         const offline = v.backendOnly && backend !== "server";
+                        const note = v.comingSoon ? null : offline ? "needs backend" : null;
                         return (
                           <button key={k} role="tab" aria-selected={tool === k}
-                            disabled={offline}
-                            title={offline ? "Needs backend" : undefined}
+                            disabled={v.comingSoon || offline}
+                            title={note ? note[0].toUpperCase() + note.slice(1) : undefined}
                             className={"tool" + (tool === k ? " on" : "")} onClick={() => selectTool(k)}>
                             {v.label}
-                            {offline && <span className="note"> (needs backend)</span>}
+                            {note && <span className="note"> ({note})</span>}
                           </button>
                         );
                       })}

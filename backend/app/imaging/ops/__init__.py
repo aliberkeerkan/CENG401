@@ -13,7 +13,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import basic, filters, frequency, geometry, noise
+from . import basic, detection, filters, frequency, geometry, noise
 from .geometry import OperationError
 
 
@@ -59,6 +59,7 @@ OPERATIONS: dict[str, OpSpec] = {
     "denoise_rayleigh": OpSpec(filters.denoise_rayleigh),
     "denoise_exponential": OpSpec(filters.denoise_exponential),
     "denoise_gamma": OpSpec(filters.denoise_gamma),
+    "line_detection": OpSpec(detection.line_detection),
 }
 
 
