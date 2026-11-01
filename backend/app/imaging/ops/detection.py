@@ -15,10 +15,15 @@ Line detection offers six methods, chosen with `method`:
   hessian  Steger's ridge detector: Hessian of the Gaussian-smoothed image,
            line points where the derivative along the normal vanishes.
 
-Canny comes from OpenCV. The methods work on the luma of the image; the
-lines are drawn over the colour image (dimmed) or over what the detector
-sees (show="response"), or the Hough accumulator is shown (show="hough",
-SHT only). Edge and corner detection are left for teammates to add here.
+Corner detection implements Harris & Stephens (1988): Sobel derivatives,
+a Gaussian-windowed second-moment matrix M, the response
+R = det(M) - k tr(M)^2, relative thresholding and non-maximum suppression.
+
+Canny comes from OpenCV; the Harris response is computed here with NumPy
+and SciPy. The methods work on the luma of the image; the lines/corners
+are drawn over the colour image (dimmed) or over what the detector sees
+(show="response"), or the Hough accumulator is shown (show="hough",
+SHT only). Edge detection is left for teammates to add here.
 
 Inputs and outputs are float64 RGB arrays of shape (H, W, 3) in [0, 255].
 """
@@ -53,7 +58,8 @@ MASK_COLORS = {
 }
 LINE_COLOR = (255, 40, 40)
 PEAK_COLOR = (60, 230, 90)
-DIM = 0.6  # the image under the drawn lines is dimmed to 60%
+CORNER_COLOR = (60, 230, 90)
+DIM = 0.6  # the image under the drawn features is dimmed to 60%
 
 
 # ---------- shared helpers ----------
@@ -83,6 +89,23 @@ def canny_edges(gray: np.ndarray, sigma: float, low: float, high: float) -> np.n
     if sigma > 0:
         gray = gaussian_blur(gray[..., None], sigma)[..., 0]
     return cv2.Canny(_to_u8(gray), low, high, L2gradient=True) > 0
+
+
+def harris_response(gray: np.ndarray, sigma: float = 1.0, k: float = 0.04) -> np.ndarray:
+    """Harris-Stephens corner response (Harris & Stephens, 1988).
+
+    Sobel gradients give I_x and I_y. A Gaussian window of scale sigma
+    integrates their products into M = [[A, C], [C, B]], where
+    A = G_sigma * I_x^2, B = G_sigma * I_y^2 and C = G_sigma * (I_x I_y).
+    The response R = det(M) - k tr(M)^2 = AB - C^2 - k(A + B)^2
+    avoids an explicit eigenvalue decomposition. Borders use the project's
+    reflection-without-repetition rule throughout.
+    """
+    gx, gy = sobel_gradients(gray)
+    a = _gaussian(gx * gx, sigma, mode="mirror")
+    b = _gaussian(gy * gy, sigma, mode="mirror")
+    c = _gaussian(gx * gy, sigma, mode="mirror")
+    return a * b - c * c - k * (a + b) ** 2
 
 
 def _normalised(x: np.ndarray) -> np.ndarray:
@@ -246,7 +269,28 @@ def _paint_points(canvas, points, color, thickness):
     canvas[points] = color
 
 
-# ---------- the operation ----------
+def harris_points(response: np.ndarray, quality: float = 0.01,
+                  nms_size: int = 5, max_corners: int = 200) -> np.ndarray:
+    """Threshold and non-maximum suppression for a Harris response.
+
+    A corner must be a local maximum in an nms_size x nms_size window and
+    have R >= quality * max(R). The relative threshold remains meaningful
+    when image contrast changes. At most max_corners strongest peaks are
+    returned, with row-major order breaking equal-response ties.
+    """
+    strongest = float(response.max())
+    if strongest <= 0:
+        return np.zeros(response.shape, dtype=bool)
+    local_max = response == _max_filter(response, size=nms_size, mode="mirror")
+    candidates = local_max & (response >= quality * strongest)
+    ys, xs = np.nonzero(candidates)
+    order = np.argsort(-response[ys, xs], kind="stable")[:max_corners]
+    points = np.zeros(response.shape, dtype=bool)
+    points[ys[order], xs[order]] = True
+    return points
+
+
+# ---------- the operations ----------
 
 def line_detection(rgb: np.ndarray, method: str = "sht", show: str = "image",
                    sigma: float = 1.4, canny_low: float = 50, canny_high: float = 150,
@@ -313,4 +357,30 @@ def line_detection(rgb: np.ndarray, method: str = "sht", show: str = "image",
         _paint_points(canvas, hits, LINE_COLOR, thick - 1)
     else:
         raise OperationError(f"Unknown line detection method: {method}")
+    return canvas.astype(np.float64)
+
+
+def corner_detection(rgb: np.ndarray, show: str = "image", sigma: float = 1.0,
+                     k: float = 0.04, quality: float = 0.01,
+                     nms_size: int = 5, max_corners: int = 200) -> np.ndarray:
+    """Mark Harris-Stephens corners with green circles.
+
+    show="image" draws over the dimmed colour image; show="response"
+    draws over the positive Harris response, normalized for display.
+    """
+    gray = luma(rgb)
+    response = harris_response(gray, sigma, k)
+    points = harris_points(response, quality, nms_size, max_corners)
+    if show == "response":
+        canvas = _as_rgb_u8(_normalised(np.maximum(response, 0)))
+    elif show == "image":
+        canvas = np.ascontiguousarray(
+            np.clip(np.floor(rgb * DIM + 0.5), 0, L - 1).astype(np.uint8)
+        )
+    else:
+        raise OperationError(f"Unknown corner detection view: {show}")
+    thick = _thickness(*gray.shape)
+    radius = max(3, 2 * thick)
+    for y, x in zip(*np.nonzero(points)):
+        cv2.circle(canvas, (int(x), int(y)), radius, CORNER_COLOR, thick, cv2.LINE_AA)
     return canvas.astype(np.float64)
