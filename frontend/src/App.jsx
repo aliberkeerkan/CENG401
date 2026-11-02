@@ -231,8 +231,8 @@ const TOOLS = {
     sliders: [
       { key: "threshold", min: 0, max: 1530, step: 10, name: "T (mask response)", methods: ["masks"] },
       { key: "sigma", min: 0, max: 4, step: 0.1, name: "σ (Gaussian before Canny)", methods: ["sht", "pht"] },
-      { key: "canny_low", min: 0, max: 495, step: 5, name: "T_L (Canny low)", methods: ["sht", "pht"] },
-      { key: "canny_high", min: 5, max: 500, step: 5, name: "T_H (Canny high)", methods: ["sht", "pht"] },
+      { key: "canny_low", min: 0, max: 495, step: 5, name: "$T_{L}$ (Canny low)", methods: ["sht", "pht"] },
+      { key: "canny_high", min: 5, max: 500, step: 5, name: "$T_{H}$ (Canny high)", methods: ["sht", "pht"] },
       { key: "vote_threshold", min: 0.05, max: 0.9, step: 0.01, name: "Votes needed (× max(W, H))", methods: ["sht"] },
       { key: "max_lines", min: 1, max: 50, step: 1, name: "Lines to draw", methods: ["sht"] },
       { key: "votes", min: 5, max: 500, step: 5, name: "Votes needed", methods: ["pht"] },
@@ -244,8 +244,13 @@ const TOOLS = {
     describe: "Classic line detectors, no machine learning. The method works on the gray levels; the lines are drawn in red over the dimmed colour image, or over what the detector sees.",
   },
   edge_detection: {
-    label: "Edge detection", comingSoon: true,
-    describe: "Not implemented yet.",
+    label: "Edge detection", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "sigma", min: 0, max: 4, step: 0.1, name: "σ (Gaussian)" },
+      { key: "canny_low", min: 0, max: 495, step: 5, name: "$T_{L}$ (Canny low)" },
+      { key: "canny_high", min: 5, max: 500, step: 5, name: "$T_{H}$ (Canny high)" },
+    ],
+    describe: "Canny’s edge detector is a classical procedure; it uses no learning. Convolution with a Gaussian G_σ attenuates noise, and the Sobel operator then supplies the gradient magnitude M = |∇(G_σ ∗ f)| together with its orientation α. Non-maximum suppression retains M only at a local maximum along α, so each edge collapses to a one-pixel ridge. Hysteresis thresholding accepts $M \\ge T_{H}$ as a strong edge and keeps a weaker response $T_{L} \\le M < T_{H}$ only when it is 8-connected to a strong edge.",
   },
   corner_detection: {
     label: "Corner detection", comingSoon: true,
@@ -437,8 +442,11 @@ const PREVIEW_ON_OPEN = new Set([
   "band_reject", "band_pass", "wiener", "kalman",
   "denoise_salt_pepper", "denoise_poisson", "denoise_quantization", "denoise_uniform",
   "denoise_gaussian", "denoise_rayleigh", "denoise_exponential", "denoise_gamma",
-  "line_detection",
 ]);
+
+// these recompute only when Apply is pressed, never on a slider change.
+// Applying the same one again replaces the last step instead of stacking.
+const APPLY_ONLY = new Set(["line_detection", "edge_detection", "corner_detection"]);
 
 function defaultParams(tool, img) {
   const w = img ? img.width : 1, h = img ? img.height : 1;
@@ -491,6 +499,7 @@ function defaultParams(tool, img) {
       direction: "all", polarity: "bright", threshold: 300,
       hessian_sigma: 2, ridge_threshold: 8,
     };
+    case "edge_detection": return { show: "edges", sigma: 1.4, canny_low: 50, canny_high: 150 };
     default: return {};
   }
 }
@@ -517,7 +526,7 @@ function opParams(tool, p) {
 const fmt = (v, d = 2) => Number(v).toFixed(d);
 const clampInt = (v, lo, hi) => Math.min(Math.max(Math.round(Number(v) || 0), lo), hi);
 
-function MathTex({ tex, display = false }) {
+function MathTex({ tex, display = false, inline = false }) {
   const ref = useRef(null);
   const html = useMemo(
     () => katex.renderToString(tex, { throwOnError: false, displayMode: display, strict: "ignore" }),
@@ -527,12 +536,22 @@ function MathTex({ tex, display = false }) {
   // down to 60% of the normal size, before the browser paints it.
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || inline) return;
     el.style.fontSize = "";
     const scale = el.clientWidth / el.scrollWidth;
     if (scale < 1) el.style.fontSize = `${Math.max(0.6, scale * 0.98)}em`;
-  }, [html]);
-  return <span ref={ref} className="math" dangerouslySetInnerHTML={{ __html: html }} />;
+  }, [html, inline]);
+  return <span ref={ref} className={inline ? "math-inline" : "math"} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+// Plain sentences may contain $...$ fragments, rendered as inline math.
+function TexBits({ text }) {
+  const parts = String(text).split(/(\$[^$]+\$)/g);
+  return parts.map((part, i) => (
+    part.startsWith("$") && part.endsWith("$")
+      ? <MathTex key={i} tex={part.slice(1, -1)} inline />
+      : <span key={i}>{part}</span>
+  ));
 }
 
 // The plan's equation for each tool, with the current parameter values.
@@ -652,7 +671,7 @@ function formulaTex(tool, params, img) {
     case "denoise_gamma":
       return `\\begin{aligned} \\hat{f}&=\\exp\\!\\Bigl(\\frac{1}{mn}\\sum_{S_{xy}}\\ln\\bigl(g+\\varepsilon\\bigr)\\Bigr)\\\\ S_{xy}&=${win} \\end{aligned}`;
     case "line_detection": {
-      const canny = `\\text{edges}&=\\mathrm{Canny}\\bigl(G_{${fmt(params.sigma, 1)}}*f,\\;T_L=${params.canny_low},\\;T_H=${params.canny_high}\\bigr)`;
+      const canny = `\\text{edges}&=\\mathrm{Canny}\\bigl(G_{${fmt(params.sigma, 1)}}*f,\\;T_{L}=${params.canny_low},\\;T_{H}=${params.canny_high}\\bigr)`;
       switch (params.method) {
         case "masks": {
           const sign = params.polarity === "dark" ? "-" : "";
@@ -679,6 +698,8 @@ function formulaTex(tool, params, img) {
           return null;
       }
     }
+    case "edge_detection":
+      return `\\begin{aligned} M&=|\\nabla(G_{${fmt(params.sigma, 1)}}*f)|,\\quad \\alpha=\\angle\\nabla f\\\\ \\text{NMS: keep }M&\\text{ only at a local max along }\\alpha\\\\ M\\ge T_{H}=${params.canny_high}&\\ \\text{ or }\\ (T_{L}=${params.canny_low}\\le M<T_{H}\\ \\text{ and linked to a strong edge}) \\end{aligned}`;
     default:
       return null;
   }
@@ -898,6 +919,7 @@ function opLabel(op) {
     case "denoise_exponential": return `Remove exponential, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
     case "denoise_gamma": return `Remove Gamma, ${p.size}×${p.size}`;
     case "line_detection": return `Line detection (${LINE_METHODS[p.method]?.short || p.method})${p.show === "hough" ? ", Hough space" : ""}`;
+    case "edge_detection": return `Canny edges, σ = ${fmt(p.sigma, 1)}, $T_{L}$ = ${p.canny_low}, $T_{H}$ = ${p.canny_high}`;
     default: return op.type;
   }
 }
@@ -966,7 +988,7 @@ function ToolControls({ tool, params, setParams, img }) {
       const other = key === "p_pepper" ? "p_salt" : "p_pepper";
       p[key] = Math.min(value, 1 - params[other]);
     }
-    if (tool === "line_detection") {
+    if (tool === "line_detection" || tool === "edge_detection") {
       if (key === "canny_low") p.canny_low = Math.min(value, params.canny_high - 5);
       if (key === "canny_high") p.canny_high = Math.max(value, params.canny_low + 5);
     }
@@ -1039,6 +1061,15 @@ function ToolControls({ tool, params, setParams, img }) {
           )}
         </>
       )}
+      {tool === "edge_detection" && (
+        <label className="select inline">
+          <span>Show</span>
+          <select value={params.show} onChange={(e) => setParams({ ...params, show: e.target.value })}>
+            <option value="edges">Edge map (white on black)</option>
+            <option value="image">Edges on the image</option>
+          </select>
+        </label>
+      )}
       {(tool === "band_reject" || tool === "band_pass") && (
         <label className="select inline">
           <span>Transfer function (Table 4.7)</span>
@@ -1066,7 +1097,7 @@ function ToolControls({ tool, params, setParams, img }) {
         const disabled = tool === "rayleigh_noise" && s.key === "a" && params.zero_mean;
         return (
           <label className="slider" key={s.key}>
-            <span>{s.name}<output>{formatSlider(s, params[s.key])}</output></span>
+            <span><span><TexBits text={s.name} /></span><output>{formatSlider(s, params[s.key])}</output></span>
             <input type="range" min={s.min} max={sliderMax(s)} step={s.step} value={params[s.key]}
               disabled={disabled}
               onChange={(e) => setParam(s.key, Number(e.target.value))} />
@@ -1127,6 +1158,8 @@ export default function App() {
   const timer = useRef(0);
   const toolsRef = useRef(null);
   const previewReq = useRef(0);
+  // the result image whose Apply should leave the sliders alone (detection tools)
+  const keepFor = useRef(null);
 
   useEffect(() => onRequest((e) => setLog((l) => [e, ...l].slice(0, 100))), []);
   useEffect(() => onStatus(setBackend), []);
@@ -1192,8 +1225,12 @@ export default function App() {
     return () => panel.removeEventListener("wheel", onWheel);
   }, [original]);
 
-  // new result (apply, undo, redo, reset, new image): reset the tool's controls
+  // new result (apply, undo, redo, reset, new image): reset the tool's controls.
+  // Detection tools are the exception: Apply replaces their step and the
+  // sliders stay, so the same values can be adjusted and applied again.
   useEffect(() => {
+    // same image object that Apply just produced: leave the controls as they are
+    if (committed && committed === keepFor.current) return;
     if (committed) setParams(defaultParams(tool, committed));
     setDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1210,6 +1247,13 @@ export default function App() {
   useEffect(() => {
     if (!committed) return;
     clearTimeout(timer.current);
+    // line, edge and corner detection run only from Apply, not from the sliders
+    if (APPLY_ONLY.has(tool)) {
+      previewReq.current += 1;
+      setPreview(null);
+      setComputing(false);
+      return;
+    }
     if (!tool || tool === "crop" || tool === "grayscale" || neutral || !dirty) {
       setPreview(null); setComputing(false); return;
     }
@@ -1323,10 +1367,12 @@ export default function App() {
   }
 
   // Returns true when the backend accepted the new operation list.
-  async function commit(nextOps) {
+  // keepControls: this result should not reset the open tool's sliders.
+  async function commit(nextOps, keepControls = false) {
     setBusy(true);
     try {
       const out = await processImage(imageId, nextOps);
+      if (keepControls) keepFor.current = out;
       setOps(nextOps);
       setCommitted(out);
       setError("");
@@ -1343,7 +1389,13 @@ export default function App() {
   async function apply() {
     if (neutral) return;
     const op = { type: tool, params: opParams(tool, params) };
-    if (await commit([...ops, op])) setRedo([]);
+    const last = ops[ops.length - 1];
+    // the same detection tool again replaces its step, so it still sees the
+    // image underneath rather than its own previous drawing
+    const nextOps = APPLY_ONLY.has(tool) && last?.type === tool
+      ? [...ops.slice(0, -1), op]
+      : [...ops, op];
+    if (await commit(nextOps, APPLY_ONLY.has(tool))) setRedo([]);
   }
 
   async function undo() {
@@ -1511,10 +1563,13 @@ export default function App() {
                           <Formula tool={tool} params={params} img={committed} />
                           {t.eq && <span className="eqno">({t.eq})</span>}
                         </div>
-                        <p className="hint">{t.describe}</p>
+                        <p className="hint"><TexBits text={t.describe} /></p>
 
                         <ToolControls tool={tool} params={params} setParams={editParams} img={committed} />
 
+                        {APPLY_ONLY.has(tool) && (
+                          <p className="hint">The image updates only when you press Apply. Pressing Apply again replaces this step.</p>
+                        )}
                         <div className="row">
                           <button className="primary" onClick={apply} disabled={neutral || busy}>Apply {t.label.toLowerCase()}</button>
                           {tool !== "grayscale" && (
@@ -1531,7 +1586,7 @@ export default function App() {
               {ops.length === 0 ? (
                 <p className="hint">No operations yet. Applied steps appear here in order.</p>
               ) : (
-                <ol className="history">{ops.map((op, i) => <li key={i}>{opLabel(op)}</li>)}</ol>
+                <ol className="history">{ops.map((op, i) => <li key={i}><TexBits text={opLabel(op)} /></li>)}</ol>
               )}
               <div className="row">
                 <button onClick={undo} disabled={!ops.length || busy}>Undo</button>

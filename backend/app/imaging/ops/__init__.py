@@ -60,6 +60,7 @@ OPERATIONS: dict[str, OpSpec] = {
     "denoise_exponential": OpSpec(filters.denoise_exponential),
     "denoise_gamma": OpSpec(filters.denoise_gamma),
     "line_detection": OpSpec(detection.line_detection),
+    "edge_detection": OpSpec(detection.edge_detection),
 }
 
 

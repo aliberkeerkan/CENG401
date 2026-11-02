@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -279,6 +280,36 @@ def test_line_detection_through_api():
         op = {"type": "line_detection", "params": params}
         r = client.post("/process", json={"image_id": image_id, "operations": [op]})
         assert r.status_code == 422, params
+
+
+def test_edge_detection_through_api():
+    arr = np.full((60, 80, 3), 40, dtype=np.uint8)
+    arr[15:45, 20:60] = 220
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    for show in ("edges", "image"):
+        op = {"type": "edge_detection", "params": {"show": show}}
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 200, show
+        assert decode(r).shape == (60, 80, 3)
+    assert "edge_detection" in client.get("/health").json()["operations"]
+
+    bad = [
+        {"canny_low": 200, "canny_high": 100},
+        {"show": "hough"},
+        {"sigma": 9},
+    ]
+    for params in bad:
+        op = {"type": "edge_detection", "params": params}
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 422, params
+
+    sample = Path(__file__).resolve().parents[2] / "frontend" / "public" / "samples" / "edge-butterfly.jpg"
+    image_id = upload(sample.read_bytes(), "edge-butterfly.jpg").json()["image_id"]
+    op = {"type": "edge_detection", "params": {"show": "edges", "sigma": 1.4, "canny_low": 50, "canny_high": 150}}
+    r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+    assert r.status_code == 200
+    edges = decode(r)
+    assert edges.ndim == 3 and (edges[..., 0] > 200).mean() > 0.01
 
 
 def test_contrast_stretch_through_api():

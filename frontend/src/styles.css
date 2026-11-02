@@ -226,6 +226,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .math .katex { font-size: 1.05em; color: var(--ink); }
 .math .katex-display { margin: 0.1em 0; text-align: left; }
 .math .katex-display > .katex { text-align: left; }
+.math-inline { display: inline-block; vertical-align: -0.15em; line-height: 1; }
+.math-inline .katex { font-size: 1em; color: inherit; }
 .eqno { order: -1; align-self: flex-end; font-family: var(--serif); font-size: 0.85rem; line-height: 1; color: var(--muted); }
 
 .slider { display: block; margin-top: 1rem; }
