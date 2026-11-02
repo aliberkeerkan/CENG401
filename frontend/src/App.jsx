@@ -1413,10 +1413,17 @@ export default function App() {
     const op = { type: tool, params: opParams(tool, params) };
     const last = ops[ops.length - 1];
     // the same detection tool again replaces its step, so it still sees the
-    // image underneath rather than its own previous drawing
-    const nextOps = APPLY_ONLY.has(tool) && last?.type === tool
-      ? [...ops.slice(0, -1), op]
-      : [...ops, op];
+    // image underneath rather than its own previous drawing. Line detection
+    // replaces every detection step at the end of the list (line, edge or
+    // corner): their red lines, edges and green circles would otherwise be
+    // detected as lines.
+    let base = ops;
+    if (tool === "line_detection") {
+      while (base.length && APPLY_ONLY.has(base[base.length - 1].type)) base = base.slice(0, -1);
+    } else if (APPLY_ONLY.has(tool) && last?.type === tool) {
+      base = ops.slice(0, -1);
+    }
+    const nextOps = [...base, op];
     if (await commit(nextOps, APPLY_ONLY.has(tool))) setRedo([]);
   }
 
