@@ -253,8 +253,15 @@ const TOOLS = {
     describe: "Canny’s edge detector is a classical procedure; it uses no learning. Convolution with a Gaussian G_σ attenuates noise, and the Sobel operator then supplies the gradient magnitude M = |∇(G_σ ∗ f)| together with its orientation α. Non-maximum suppression retains M only at a local maximum along α, so each edge collapses to a one-pixel ridge. Hysteresis thresholding accepts $M \\ge T_{H}$ as a strong edge and keeps a weaker response $T_{L} \\le M < T_{H}$ only when it is 8-connected to a strong edge.",
   },
   corner_detection: {
-    label: "Corner detection", comingSoon: true,
-    describe: "Not implemented yet.",
+    label: "Corner detection", heavy: true, backendOnly: true,
+    sliders: [
+      { key: "sigma", min: 0.5, max: 4, step: 0.1, name: "σ (Gaussian window)" },
+      { key: "k", min: 0.01, max: 0.1, step: 0.01, name: "k (Harris constant)" },
+      { key: "quality", min: 0.01, max: 0.5, step: 0.01, name: "Quality (× strongest response)" },
+      { key: "nms_size", min: 3, max: 21, step: 2, name: "NMS window" },
+      { key: "max_corners", min: 10, max: 500, step: 10, name: "Maximum corners" },
+    ],
+    describe: "Harris–Stephens corner detector. Sobel gradients form a Gaussian-smoothed 2 × 2 matrix; positive local maxima of R are marked in green. Quality is relative to the strongest response, so it adapts to image contrast.",
   },
 };
 
@@ -492,6 +499,9 @@ function defaultParams(tool, img) {
     case "denoise_exponential": return { noise_std: 15, size: 3 };
     case "denoise_poisson":
     case "denoise_quantization": return { sigma: 1 };
+    case "corner_detection": return {
+      show: "image", sigma: 1, k: 0.04, quality: 0.01, nms_size: 5, max_corners: 200,
+    };
     case "line_detection": return {
       method: "sht", show: "image",
       sigma: 1.4, canny_low: 50, canny_high: 150, vote_threshold: 0.15, max_lines: 10,
@@ -670,6 +680,8 @@ function formulaTex(tool, params, img) {
       return `\\begin{aligned} g'&=g-\\sigma_\\eta\\\\ \\hat{f}&=\\mathrm{Wiener}(g',\\,\\sigma_\\eta),\\; S_{xy}=${win} \\end{aligned}`;
     case "denoise_gamma":
       return `\\begin{aligned} \\hat{f}&=\\exp\\!\\Bigl(\\frac{1}{mn}\\sum_{S_{xy}}\\ln\\bigl(g+\\varepsilon\\bigr)\\Bigr)\\\\ S_{xy}&=${win} \\end{aligned}`;
+    case "corner_detection":
+      return `\\begin{aligned} M&=G_${fmt(params.sigma, 1)}*\\begin{bmatrix}I_x^2&I_xI_y\\\\I_xI_y&I_y^2\\end{bmatrix}\\\\ R&=\\det(M)-${fmt(params.k, 2)}\\,\\operatorname{tr}(M)^2\\\\ R&\\ge ${fmt(params.quality, 2)}\\max(R_+),\\quad \\mathrm{NMS}:\\ ${params.nms_size}\\times${params.nms_size} \\end{aligned}`;
     case "line_detection": {
       const canny = `\\text{edges}&=\\mathrm{Canny}\\bigl(G_{${fmt(params.sigma, 1)}}*f,\\;T_{L}=${params.canny_low},\\;T_{H}=${params.canny_high}\\bigr)`;
       switch (params.method) {
@@ -918,6 +930,7 @@ function opLabel(op) {
     case "denoise_rayleigh": return `Remove Rayleigh, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
     case "denoise_exponential": return `Remove exponential, σ_η = ${fmt(p.noise_std, 0)}, ${p.size}×${p.size}`;
     case "denoise_gamma": return `Remove Gamma, ${p.size}×${p.size}`;
+    case "corner_detection": return `Corner detection (Harris)${p.show === "response" ? ", response map" : ""}`;
     case "line_detection": return `Line detection (${LINE_METHODS[p.method]?.short || p.method})${p.show === "hough" ? ", Hough space" : ""}`;
     case "edge_detection": return `Canny edges, σ = ${fmt(p.sigma, 1)}, $T_{L}$ = ${p.canny_low}, $T_{H}$ = ${p.canny_high}`;
     default: return op.type;
@@ -1013,6 +1026,15 @@ function ToolControls({ tool, params, setParams, img }) {
 
   return (
     <>
+      {tool === "corner_detection" && (
+        <label className="select inline">
+          <span>Show</span>
+          <select value={params.show} onChange={(e) => setParams({ ...params, show: e.target.value })}>
+            <option value="image">Corners on the image</option>
+            <option value="response">Corners on positive Harris response</option>
+          </select>
+        </label>
+      )}
       {tool === "line_detection" && (
         <>
           <label className="select inline">

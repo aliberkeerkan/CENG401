@@ -748,3 +748,90 @@ def test_canny_edges_lie_on_the_square_and_thin_out_as_the_high_threshold_rises(
 
     with pytest.raises(geometry.OperationError):
         detection.edge_detection(img, show="hough")
+
+
+# ---------- Harris-Stephens corner detection ----------
+
+def _brute_harris_response(gray, sigma, k):
+    """Direct loops for Sobel + Gaussian moments + R, independent of production code."""
+    h, w = gray.shape
+    sx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float64)
+    sy = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float64)
+    padded = np.pad(gray, 1, mode="reflect")
+    gx, gy = np.empty_like(gray), np.empty_like(gray)
+    for y in range(h):
+        for x in range(w):
+            patch = padded[y:y + 3, x:x + 3]
+            # scipy.ndimage.convolve reverses the kernel; these Sobels are antisymmetric.
+            gx[y, x] = np.sum(patch * sx[::-1, ::-1])
+            gy[y, x] = np.sum(patch * sy[::-1, ::-1])
+
+    radius = int(4 * sigma + 0.5)  # scipy.ndimage.gaussian_filter's default truncate=4
+    t = np.arange(-radius, radius + 1)
+    g = np.exp(-(t * t) / (2 * sigma * sigma))
+    g /= g.sum()
+    kernel = np.outer(g, g)
+
+    def smooth(z):
+        p = np.pad(z, radius, mode="reflect")
+        out = np.empty_like(z)
+        for y in range(h):
+            for x in range(w):
+                out[y, x] = np.sum(p[y:y + 2 * radius + 1, x:x + 2 * radius + 1] * kernel)
+        return out
+
+    a, b, c = smooth(gx * gx), smooth(gy * gy), smooth(gx * gy)
+    return a * b - c * c - k * (a + b) ** 2
+
+
+def test_harris_response_matches_direct_formula_and_reflection_border():
+    gray = np.random.default_rng(81).integers(0, 256, (7, 9)).astype(np.float64)
+    expected = _brute_harris_response(gray, sigma=0.8, k=0.04)
+    actual = detection.harris_response(gray, sigma=0.8, k=0.04)
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-8)
+
+
+def test_harris_finds_four_square_corners_but_no_flat_or_edge_corners():
+    square = np.zeros((80, 80), dtype=np.float64)
+    square[20:60, 20:60] = 255
+    response = detection.harris_response(square, sigma=1.0, k=0.04)
+    points = detection.harris_points(response, quality=0.01, nms_size=5, max_corners=200)
+    ys, xs = np.nonzero(points)
+    assert len(xs) == 4
+    for x, y in ((20, 20), (59, 20), (20, 59), (59, 59)):
+        assert np.min(np.hypot(xs - x, ys - y)) <= 1
+
+    flat_response = detection.harris_response(np.full((30, 40), 100.0))
+    assert np.all(flat_response == 0)
+    assert not detection.harris_points(flat_response).any()
+
+    edge = np.zeros((60, 60), dtype=np.float64)
+    edge[:, 30:] = 255
+    edge_response = detection.harris_response(edge)
+    assert edge_response.max() <= 1e-8  # one large and one zero eigenvalue: det(M) = 0
+    assert not detection.harris_points(edge_response).any()
+
+
+def test_harris_threshold_nms_and_max_corners():
+    response = np.zeros((15, 15), dtype=np.float64)
+    response[3, 3] = 10
+    response[3, 4] = 9       # suppressed by the stronger adjacent peak
+    response[12, 12] = 8
+    response[7, 7] = 0.05    # below quality=0.01 times the maximum (0.1)
+    points = detection.harris_points(response, quality=0.01, nms_size=3, max_corners=10)
+    assert np.array_equal(np.argwhere(points), np.array([[3, 3], [12, 12]]))
+    strongest_only = detection.harris_points(response, quality=0.01, nms_size=3, max_corners=1)
+    assert np.array_equal(np.argwhere(strongest_only), np.array([[3, 3]]))
+
+
+def test_corner_detection_draws_green_circles_and_has_response_view():
+    square = np.zeros((80, 80, 3), dtype=np.float64)
+    square[20:60, 20:60] = 255
+    for show in ("image", "response"):
+        out = detection.corner_detection(square, show=show)
+        assert out.shape == square.shape and out.dtype == np.float64
+        green = (out[..., 1] > 180) & (out[..., 0] < 160) & (out[..., 2] < 160)
+        assert green.any()
+        assert np.array_equal(out, detection.corner_detection(square, show=show))
+    flat = np.full((40, 50, 3), 100.0)
+    assert np.all(detection.corner_detection(flat) == 60)
