@@ -372,3 +372,39 @@ def test_denoise_additive_parameters_are_validated():
     for op in bad:
         r = client.post("/process", json={"image_id": image_id, "operations": [op]})
         assert r.status_code == 422, op
+
+
+
+def test_corner_detection_through_api():
+    arr = np.zeros((60, 60, 3), dtype=np.uint8)
+    arr[15:45, 15:45] = 240
+    image_id = upload(png_bytes(arr)).json()["image_id"]
+    for show in ("image", "response"):
+        op = {"type": "corner_detection", "params": {
+            "show": show, "sigma": 1.0, "k": 0.04,
+            "quality": 0.01, "nms_size": 5, "max_corners": 20,
+        }}
+        body = {"image_id": image_id, "operations": [op]}
+        r = client.post("/process", json=body)
+        assert r.status_code == 200, r.text
+        assert decode(r).shape == (60, 60, 3)
+        exported = client.post("/export", json={**body, "format": "png"})
+        assert exported.status_code == 200
+        assert np.array_equal(decode(r), decode(exported))
+
+    bad = [
+        {"sigma": 0.2},
+        {"sigma": 5.1},
+        {"k": 0},
+        {"k": 0.21},
+        {"quality": 0},
+        {"quality": 1.01},
+        {"nms_size": 4},
+        {"nms_size": 1},
+        {"max_corners": 0},
+        {"show": "hough"},
+    ]
+    for params in bad:
+        op = {"type": "corner_detection", "params": params}
+        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+        assert r.status_code == 422, params

@@ -225,6 +225,27 @@ class LineDetectionParams(BaseModel):
         return self
 
 
+class CornerDetectionParams(BaseModel):
+    """Harris-Stephens response, relative threshold and local-maximum selection."""
+
+    show: Literal["image", "response"] = "image"
+    sigma: float = Field(default=1.0, ge=0.3, le=5, description="Gaussian integration scale sigma")
+    k: float = Field(default=0.04, ge=0.01, le=0.2, description="Harris sensitivity constant k")
+    quality: float = Field(
+        default=0.01, gt=0, le=1,
+        description="Minimum accepted R as a fraction of the strongest positive response",
+    )
+    nms_size: int = Field(default=5, ge=3, le=31, description="Odd non-maximum-suppression window")
+    max_corners: int = Field(default=200, ge=1, le=2000, description="Maximum number of strongest corners drawn")
+
+    @field_validator("nms_size")
+    @classmethod
+    def nms_window_must_be_odd(cls, v: int) -> int:
+        if v % 2 == 0:
+            raise ValueError("The non-maximum-suppression window must be odd.")
+        return v
+
+
 class CropOp(BaseModel):
     type: Literal["crop"]
     params: CropParams
@@ -390,6 +411,11 @@ class LineDetectionOp(BaseModel):
     params: LineDetectionParams
 
 
+class CornerDetectionOp(BaseModel):
+    type: Literal["corner_detection"]
+    params: CornerDetectionParams
+
+
 class GrayscaleOp(BaseModel):
     type: Literal["grayscale"]
     params: EmptyParams | None = None
@@ -415,7 +441,7 @@ Operation = Annotated[
         BandRejectOp, BandPassOp, WienerOp, KalmanOp,
         DenoiseSaltPepperOp, DenoiseUniformOp, DenoiseQuantizationOp, DenoisePoissonOp,
         DenoiseGaussianOp, DenoiseRayleighOp, DenoiseExponentialOp, DenoiseGammaOp,
-        LineDetectionOp,
+        LineDetectionOp, CornerDetectionOp,
     ],
     Field(discriminator="type"),
 ]
