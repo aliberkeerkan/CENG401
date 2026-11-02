@@ -15,6 +15,11 @@ Line detection offers six methods, chosen with `method`:
   hessian  Steger's ridge detector: Hessian of the Gaussian-smoothed image,
            line points where the derivative along the normal vanishes.
 
+Edge detection is Canny (G&W Sec. 10.2): the project's own Gaussian, then
+OpenCV's Sobel gradient, non-maximum suppression and hysteresis.
+show="edges" is the white edge map; show="image" draws those edges in red
+on the dimmed colour image.
+
 Corner detection implements Harris & Stephens (1988): Sobel derivatives,
 a Gaussian-windowed second-moment matrix M, the response
 R = det(M) - k tr(M)^2, relative thresholding and non-maximum suppression.
@@ -23,7 +28,7 @@ Canny comes from OpenCV; the Harris response is computed here with NumPy
 and SciPy. The methods work on the luma of the image; the lines/corners
 are drawn over the colour image (dimmed) or over what the detector sees
 (show="response"), or the Hough accumulator is shown (show="hough",
-SHT only). Edge detection is left for teammates to add here.
+SHT only).
 
 Inputs and outputs are float64 RGB arrays of shape (H, W, 3) in [0, 255].
 """
@@ -357,6 +362,22 @@ def line_detection(rgb: np.ndarray, method: str = "sht", show: str = "image",
         _paint_points(canvas, hits, LINE_COLOR, thick - 1)
     else:
         raise OperationError(f"Unknown line detection method: {method}")
+    return canvas.astype(np.float64)
+
+
+def edge_detection(rgb: np.ndarray, show: str = "edges", sigma: float = 1.4,
+                   canny_low: float = 50, canny_high: float = 150) -> np.ndarray:
+    """Canny edges (G&W Sec. 10.2). Gaussian smoothing uses this project's
+    kernel; Sobel, non-maximum suppression and hysteresis are OpenCV's
+    (exact gradient magnitude). show="edges" is white edges on black;
+    show="image" draws them in red on the dimmed colour image."""
+    if show not in ("edges", "image"):
+        raise OperationError(f"Unknown edge detection view: {show}")
+    edges = canny_edges(luma(rgb), sigma, canny_low, canny_high)
+    if show == "edges":
+        return _as_rgb_u8(edges * float(L - 1)).astype(np.float64)
+    canvas = np.ascontiguousarray(np.clip(np.floor(rgb * DIM + 0.5), 0, L - 1).astype(np.uint8))
+    canvas[edges] = LINE_COLOR
     return canvas.astype(np.float64)
 
 

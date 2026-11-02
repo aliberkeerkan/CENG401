@@ -225,6 +225,24 @@ class LineDetectionParams(BaseModel):
         return self
 
 
+class EdgeDetectionParams(BaseModel):
+    """Canny edge detection (Gonzalez & Woods Sec. 10.2). No ML."""
+
+    show: Literal["edges", "image"] = Field(
+        default="edges",
+        description="White edges on black, or red edges on the dimmed colour image",
+    )
+    sigma: float = Field(default=1.4, ge=0, le=5, description="Gaussian sigma before Canny")
+    canny_low: float = Field(default=50, ge=0, le=1000, description="Canny low threshold T_L")
+    canny_high: float = Field(default=150, ge=1, le=1000, description="Canny high threshold T_H")
+
+    @model_validator(mode="after")
+    def consistent(self):
+        if self.canny_low >= self.canny_high:
+            raise ValueError("Canny T_L must be smaller than T_H.")
+        return self
+
+
 class CornerDetectionParams(BaseModel):
     """Harris-Stephens response, relative threshold and local-maximum selection."""
 
@@ -411,6 +429,11 @@ class LineDetectionOp(BaseModel):
     params: LineDetectionParams
 
 
+class EdgeDetectionOp(BaseModel):
+    type: Literal["edge_detection"]
+    params: EdgeDetectionParams
+
+
 class CornerDetectionOp(BaseModel):
     type: Literal["corner_detection"]
     params: CornerDetectionParams
@@ -441,7 +464,7 @@ Operation = Annotated[
         BandRejectOp, BandPassOp, WienerOp, KalmanOp,
         DenoiseSaltPepperOp, DenoiseUniformOp, DenoiseQuantizationOp, DenoisePoissonOp,
         DenoiseGaussianOp, DenoiseRayleighOp, DenoiseExponentialOp, DenoiseGammaOp,
-        LineDetectionOp, CornerDetectionOp,
+        LineDetectionOp, EdgeDetectionOp, CornerDetectionOp,
     ],
     Field(discriminator="type"),
 ]

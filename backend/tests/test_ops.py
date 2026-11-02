@@ -711,6 +711,44 @@ def test_line_detection_keeps_the_image_dimmed_where_nothing_is_found():
         assert out.shape == flat.shape and np.allclose(out, 60.0), m
 
 
+def _on_square_border(ys, xs, y0, y1, x0, x1, tol=2):
+    """True where a pixel is within tol of the boundary of [y0:y1, x0:x1]."""
+    return (
+        (np.abs(ys - y0) <= tol) | (np.abs(ys - (y1 - 1)) <= tol)
+        | (np.abs(xs - x0) <= tol) | (np.abs(xs - (x1 - 1)) <= tol)
+    )
+
+
+def test_canny_edges_lie_on_the_square_and_thin_out_as_the_high_threshold_rises():
+    y0, y1, x0, x1 = 20, 60, 25, 75
+    img = np.full((80, 100, 3), 40.0)
+    img[y0:y1, x0:x1] = 220.0
+    out = detection.edge_detection(img, show="edges", sigma=1.0, canny_low=40, canny_high=120)
+    white = out[..., 0] > 200
+    ys, xs = np.nonzero(white)
+    assert ys.size > 50
+    assert np.mean(_on_square_border(ys, xs, y0, y1, x0, x1)) > 0.9
+    assert np.array_equal(out, detection.edge_detection(img, show="edges", sigma=1.0, canny_low=40, canny_high=120))
+
+    overlay = detection.edge_detection(img, show="image", sigma=1.0, canny_low=40, canny_high=120)
+    assert _red(overlay).any()
+    # away from the square the colour image is only dimmed
+    assert np.allclose(overlay[5, 5], 24.0)
+
+    flat = np.full((40, 50, 3), 100.0)
+    assert not (detection.edge_detection(flat, show="edges") > 0).any()
+    assert np.allclose(detection.edge_detection(flat, show="image"), 60.0)
+
+    # a faint step survives a low T_H and drops out as T_H rises
+    faint = np.full((60, 80, 3), 100.0)
+    faint[15:45, 20:60] = 130.0
+    loose = detection.edge_detection(faint, sigma=1.0, canny_low=10, canny_high=30)
+    tight = detection.edge_detection(faint, sigma=1.0, canny_low=10, canny_high=200)
+    assert (loose[..., 0] > 200).sum() > (tight[..., 0] > 200).sum()
+
+    with pytest.raises(geometry.OperationError):
+        detection.edge_detection(img, show="hough")
+
 
 # ---------- Harris-Stephens corner detection ----------
 
