@@ -1,4 +1,5 @@
 import io
+import json
 from pathlib import Path
 
 import numpy as np
@@ -286,18 +287,25 @@ def test_edge_detection_through_api():
     arr = np.full((60, 80, 3), 40, dtype=np.uint8)
     arr[15:45, 20:60] = 220
     image_id = upload(png_bytes(arr)).json()["image_id"]
-    for show in ("edges", "image"):
-        op = {"type": "edge_detection", "params": {"show": show}}
-        r = client.post("/process", json={"image_id": image_id, "operations": [op]})
-        assert r.status_code == 200, show
-        assert decode(r).shape == (60, 80, 3)
+    for method in ("sobel", "prewitt", "roberts", "log", "canny"):
+        for show in ("edges", "response", "image"):
+            op = {"type": "edge_detection", "params": {"method": method, "show": show, "sigma": 1.0}}
+            r = client.post("/process", json={"image_id": image_id, "operations": [op]})
+            assert r.status_code == 200, (method, show)
+            assert decode(r).shape == (60, 80, 3)
     assert "edge_detection" in client.get("/health").json()["operations"]
 
     bad = [
         {"canny_low": 200, "canny_high": 100},
         {"show": "hough"},
         {"sigma": 9},
+        {"method": "kirsch"},
+        {"method": "log", "sigma": 0},
     ]
+    # a gradient method ignores the Canny pair, so T_L > T_H is allowed there
+    ok = {"method": "sobel", "canny_low": 200, "canny_high": 100}
+    assert client.post("/process", json={"image_id": image_id, "operations": [
+        {"type": "edge_detection", "params": ok}]}).status_code == 200
     for params in bad:
         op = {"type": "edge_detection", "params": params}
         r = client.post("/process", json={"image_id": image_id, "operations": [op]})
@@ -310,6 +318,51 @@ def test_edge_detection_through_api():
     assert r.status_code == 200
     edges = decode(r)
     assert edges.ndim == 3 and (edges[..., 0] > 200).mean() > 0.01
+
+
+def _frame(arr, ops):
+    return client.post(
+        "/process-frame",
+        files={"file": ("frame.jpg", png_bytes(arr, "JPEG"), "image/jpeg")},
+        data={"operations": json.dumps(ops)},
+    )
+
+
+def test_process_frame_returns_a_jpeg_without_storing_anything():
+    arr = np.full((48, 64, 3), 40, dtype=np.uint8)
+    arr[12:36, 16:48] = 220
+    r = _frame(arr, [{"type": "grayscale", "params": {}}])
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    out = decode(r).astype(int)
+    assert out.shape == (48, 64, 3)
+    assert np.abs(out[..., 0] - out[..., 1]).max() <= 3  # gray, within JPEG error
+
+    # an empty list returns the frame (re-encoded), and live tools run as in /process
+    assert _frame(arr, []).status_code == 200
+    for op in (
+        {"type": "edge_detection", "params": {"show": "edges"}},
+        {"type": "corner_detection", "params": {}},
+        {"type": "line_detection", "params": {"method": "sht"}},
+    ):
+        r = _frame(arr, [op])
+        assert r.status_code == 200, op
+        assert decode(r).shape == (48, 64, 3)
+
+    # the same frame twice gives the same result
+    ops = [{"type": "edge_detection", "params": {"show": "image"}}]
+    assert np.array_equal(decode(_frame(arr, ops)), decode(_frame(arr, ops)))
+
+
+def test_process_frame_rejects_bad_input():
+    arr = np.zeros((16, 16, 3), dtype=np.uint8)
+    assert _frame(arr, [{"type": "wobble", "params": {}}]).status_code == 422
+    assert _frame(arr, [{"type": "edge_detection", "params": {"canny_low": 200, "canny_high": 100}}]).status_code == 422
+    r = client.post("/process-frame", files={"file": ("f.jpg", png_bytes(arr, "JPEG"), "image/jpeg")},
+                    data={"operations": "[not json"})
+    assert r.status_code == 422
+    r = client.post("/process-frame", files={"file": ("f.jpg", b"not an image", "image/jpeg")},
+                    data={"operations": "[]"})
+    assert r.status_code == 415
 
 
 def test_contrast_stretch_through_api():

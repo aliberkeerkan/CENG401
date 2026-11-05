@@ -40,6 +40,7 @@ pytest
 | POST | `/upload` | multipart `file` (JPEG, PNG, TIFF; max 20 MB) | `{ image_id, width, height, scaled, source_format }` |
 | GET | `/images/{image_id}/original` | – | `image/png` |
 | POST | `/process` | `{ image_id, operations: [{ type, params }] }` | `image/png` |
+| POST | `/process-frame` | multipart `file` (one camera frame, JPEG or PNG; max 8 MB) + `operations` (the same list as `/process`, as a JSON string) | `image/jpeg` |
 | POST | `/export` | `{ image_id, operations, format: png \| jpeg \| tiff, quality }` | file download |
 
 | Group | Operation types and parameters |
@@ -49,7 +50,7 @@ pytest
 | Frequency | `band_reject` (40) / `band_pass` (41) {c0, width: fractions of D_max, kind: ideal \| butterworth \| gaussian, n}, `wiener` (44) {noise_std}, `kalman` {q, r}: 1-D Kalman smoother on rows, then columns |
 | Noise | `salt_pepper_noise` {p_pepper, p_salt, seed}, `quantization_noise` {bits: 1–8}, `rayleigh_noise` {a, b, zero_mean, seed}, `uniform_noise` {a, b, seed}, `exponential_noise` (26) {a, zero_mean, seed}, `gamma_noise` (20)-(21) {nu, seed}, `poisson_noise` (19) {kappa, seed} |
 | Denoise | `denoise_salt_pepper` and `denoise_uniform` {size: odd, 3–15}; `denoise_poisson` and `denoise_quantization` {sigma} |
-| Advanced | `line_detection` {method: masks \| sht \| pht \| lsd \| edlines \| hessian, show: image \| response \| hough (SHT only), plus the chosen method's parameters; all have defaults}: classic detectors, no ML. G&W line masks; standard Hough transform on Canny edges (own accumulator); OpenCV's probabilistic Hough, LSD and EDLines; Steger's Hessian ridge detector. `edge_detection` {show: edges \| image, sigma, canny_low, canny_high}: Canny (project Gaussian, then OpenCV Sobel, non-maximum suppression and hysteresis). `corner_detection` {show: image \| response, sigma, k, quality, nms_size: odd, max_corners}: Harris–Stephens response with relative thresholding and non-maximum suppression, computed with NumPy and SciPy. Canny comes from OpenCV |
+| Advanced | `line_detection` {method: masks \| sht \| pht \| lsd \| edlines \| hessian, show: image \| response \| hough (SHT only), plus the chosen method's parameters; all have defaults}: classic detectors, no ML. G&W line masks; standard Hough transform on Canny edges (own accumulator); OpenCV's probabilistic Hough, LSD and EDLines; Steger's Hessian ridge detector. `edge_detection` {method: sobel \| prewitt \| roberts \| log \| canny, show: edges \| response \| image, sigma, threshold, and for Canny canny_low < canny_high}: Sobel, Prewitt and Roberts threshold the gradient magnitude; LoG (Marr–Hildreth) keeps zero crossings whose slope reaches the threshold; Canny is the project Gaussian plus OpenCV Sobel, non-maximum suppression and hysteresis. `corner_detection` {show: image \| response, sigma, k, quality, nms_size: odd, max_corners}: Harris–Stephens response with relative thresholding and non-maximum suppression, computed with NumPy and SciPy. Canny comes from OpenCV |
 
 Limits are listed in `app/schemas.py` and on the `/docs` page.
 
@@ -78,7 +79,7 @@ app/
       filters.py     Gaussian blur (10), unsharp mask, mean filters (27)-(29), order statistics (31)-(34), alpha-trimmed mean (35), adaptive median (5.4.3), denoise helpers
       frequency.py   band-reject (40), band-pass (41), Wiener (44), Kalman smoother
       noise.py       salt-and-pepper (18), Poisson (19), gamma/speckle (20)-(21), quantization (22), Rayleigh (24), uniform (25), exponential (26)
-      detection.py   line detection: G&W masks, SHT, PHT, LSD, EDLines, Hessian (Steger); Canny edge detection (OpenCV); Harris corner detection
+      detection.py   line detection: G&W masks, SHT, PHT, LSD, EDLines, Hessian (Steger); edge detection (Sobel, Prewitt, Roberts, LoG, Canny); Harris corner detection
 tests/               unit and API tests
 ```
 

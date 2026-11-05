@@ -21,11 +21,24 @@ networks in Windows Firewall.
 
 | File | Role |
 |------|------|
-| `src/App.jsx` | UI: upload, tools, original/processed view, history, histogram, request log |
+| `src/App.jsx` | UI: upload, tools, original/processed view, history. An Edit / Compare switch sits above the samples: Compare shows the base image plus up to five tools (A–E), each applied to that image on its own |
 | `src/imageOps.js` | Operations for instant previews: crop (4), resize (5), grayscale (6), brightness (8), contrast stretching, Gaussian blur (10), median (33); histogram statistics (12–14). Same results as the backend |
 | `src/api.js` | API layer. Talks to the FastAPI backend; simulates it in the browser if the backend is not running |
-| `src/App.jsx` (backend-only tools) | Salt & pepper (18), quantization (22), Rayleigh (24), uniform (25), exponential (26), gamma / speckle (20)–(21) and Poisson (19) noise; a Denoise category for salt & pepper, Poisson, quantization and uniform; sharpen (unsharp mask); arithmetic (27), geometric (28) and harmonic (29) mean filters; min (31), max (32), midpoint (34), alpha-trimmed mean (35) and adaptive median (5.4.3) filters; band-reject (40), band-pass (41), Wiener (44) and a 1-D Kalman smoother; an Advanced tools category with line detection (six classic methods chosen from a menu: G&W masks, SHT with a Hough-space view, PHT, LSD, EDLines, Hessian ridges; no ML) and Canny edge detection (Gaussian, Sobel, non-maximum suppression, hysteresis) and Harris–Stephens corner detection. Line, edge and corner detection update the image only when Apply is pressed; Apply again replaces that step. Preview and apply always run on the FastAPI backend — these tools are disabled ("needs backend") when the backend is not connected. Hovering the processed image reads the pixel coordinate and its value. |
+| `src/App.jsx` (backend-only tools) | Salt & pepper (18), quantization (22), Rayleigh (24), uniform (25), exponential (26), gamma / speckle (20)–(21) and Poisson (19) noise; a Denoise category for salt & pepper, Poisson, quantization and uniform; sharpen (unsharp mask); arithmetic (27), geometric (28) and harmonic (29) mean filters; min (31), max (32), midpoint (34), alpha-trimmed mean (35) and adaptive median (5.4.3) filters; band-reject (40), band-pass (41), Wiener (44) and a 1-D Kalman smoother; an Advanced tools category with line detection (six classic methods chosen from a menu: G&W masks, SHT with a Hough-space view, PHT, LSD, EDLines, Hessian ridges; no ML) and edge detection with five methods chosen from buttons (Sobel, Prewitt, Roberts, LoG, Canny) and Harris–Stephens corner detection. Line, edge and corner detection update the image only when Apply is pressed; Apply again replaces that step. Preview and apply always run on the FastAPI backend — these tools are disabled ("needs backend") when the backend is not connected. Hovering the processed image reads the pixel coordinate and its value. |
 | `src/styles.css` | Styles (light/dark theme) |
+
+## Live camera
+
+"Use camera" (or "Start camera" in the tools panel) shows the camera on the left and the
+processed view on the right, updated continuously. The applied steps and the tool being
+adjusted run on every frame, so the sliders change the picture at once; the line, edge and
+corner detection tools follow the sliders too while the camera is on. Frames go to the
+backend's `/process-frame` at up to 640 px on the longest side, one at a time: a new frame
+is sent only when the previous result has arrived, so a slow filter lowers the frame rate
+instead of building up a delay. "Capture frame" keeps the current frame as a still image
+and stops the camera. The camera needs the backend, and a secure page: `http://localhost`
+works, a LAN address such as `http://192.168.1.20:5173` is blocked by the browser unless it
+is served over https.
 
 ## Backend
 

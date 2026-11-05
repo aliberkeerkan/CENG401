@@ -2,11 +2,12 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import {
-  upload, uploadSample, uploadFromUrl, processImage, fetchOriginal, exportImage, saveBlob, EXPORT_FORMATS,
-  onRequest, onStatus, checkBackend, API_URL,
+  upload, uploadSample, uploadFromUrl, processImage, processFrame, fetchOriginal, exportImage, saveBlob, EXPORT_FORMATS,
+  onStatus, checkBackend, API_URL,
 } from "./api.js";
 import { BUILTIN_SAMPLES } from "./builtinSamples.js";
-import { applyOp, stats, sampleImage, gaussianKernel, rgbRange } from "./imageOps.js";
+import { applyOp, sampleImage, gaussianKernel, rgbRange } from "./imageOps.js";
+import ComparePanel from "./Compare.jsx";
 
 // Tool definitions. `heavy` tools get a short delay before the preview is
 // computed so dragging a slider stays smooth. `backendOnly` tools are not
@@ -246,11 +247,12 @@ const TOOLS = {
   edge_detection: {
     label: "Edge detection", heavy: true, backendOnly: true,
     sliders: [
-      { key: "sigma", min: 0, max: 4, step: 0.1, name: "σ (Gaussian)" },
-      { key: "canny_low", min: 0, max: 495, step: 5, name: "$T_{L}$ (Canny low)" },
-      { key: "canny_high", min: 5, max: 500, step: 5, name: "$T_{H}$ (Canny high)" },
+      { key: "sigma", min: 0, max: 4, step: 0.1, name: "σ (Gaussian)", methods: ["sobel", "prewitt", "roberts", "log", "canny"] },
+      { key: "threshold", min: 1, max: 600, step: 1, name: "$T$ (threshold)", methods: ["sobel", "prewitt", "roberts", "log"] },
+      { key: "canny_low", min: 0, max: 495, step: 5, name: "$T_{L}$ (Canny low)", methods: ["canny"] },
+      { key: "canny_high", min: 5, max: 500, step: 5, name: "$T_{H}$ (Canny high)", methods: ["canny"] },
     ],
-    describe: "Canny’s edge detector is a classical procedure; it uses no learning. Convolution with a Gaussian G_σ attenuates noise, and the Sobel operator then supplies the gradient magnitude M = |∇(G_σ ∗ f)| together with its orientation α. Non-maximum suppression retains M only at a local maximum along α, so each edge collapses to a one-pixel ridge. Hysteresis thresholding accepts $M \\ge T_{H}$ as a strong edge and keeps a weaker response $T_{L} \\le M < T_{H}$ only when it is 8-connected to a strong edge.",
+    describe: "Five classical edge detectors, no learning. The buttons pick the method; the formula and the sliders follow it.",
   },
   corner_detection: {
     label: "Corner detection", heavy: true, backendOnly: true,
@@ -403,6 +405,29 @@ const LINE_MASKS_TEX = {
   minus45: "2&-1&-1\\\\ -1&2&-1\\\\ -1&-1&2",
 };
 
+const EDGE_METHODS = {
+  sobel: {
+    short: "Sobel", response: "Gradient magnitude",
+    hint: "A 3×3 gradient. The centre pixel is weighted twice, which smooths a little. A pixel is an edge where the magnitude M reaches T. Nothing thins the result, so an edge stays a few pixels wide.",
+  },
+  prewitt: {
+    short: "Prewitt", response: "Gradient magnitude",
+    hint: "The same 3×3 gradient as Sobel, but every neighbour counts the same. A little more sensitive to noise; useful next to Sobel to see what the extra centre weight does.",
+  },
+  roberts: {
+    short: "Roberts", response: "Gradient magnitude",
+    hint: "2×2 diagonal differences, the smallest mask there is. Fast, and the most sensitive to noise: compare it with Sobel on a noisy picture, with σ at 0.",
+  },
+  log: {
+    short: "LoG", response: "Laplacian magnitude",
+    hint: "Laplacian of a Gaussian (Marr–Hildreth). An edge is a zero crossing of that result whose slope reaches T. It uses the second derivative, not the gradient, so it behaves differently from the three above.",
+  },
+  canny: {
+    short: "Canny", response: "Gradient magnitude",
+    hint: "Canny’s detector. A Gaussian attenuates noise, Sobel supplies the magnitude M and the direction α, non-maximum suppression keeps M only at a local maximum along α, and hysteresis accepts $M \\ge T_{H}$ outright while keeping $T_{L} \\le M < T_{H}$ only when it connects to a strong edge.",
+  },
+};
+
 // tools not implemented in imageOps.js: preview comes from the backend and
 // the tool is disabled while the backend is offline
 const BACKEND_ONLY = new Set(
@@ -453,7 +478,55 @@ const PREVIEW_ON_OPEN = new Set([
 
 // these recompute only when Apply is pressed, never on a slider change.
 // Applying the same one again replaces the last step instead of stacking.
+// (With the live camera on they follow the sliders, since the view is live anyway.)
 const APPLY_ONLY = new Set(["line_detection", "edge_detection", "corner_detection"]);
+
+// ---------- live camera ----------
+// The camera runs at most this many pixels on the longest side: every frame
+// goes to the backend, and the filters take time in proportion to the pixels.
+const LIVE_MAX_SIDE = 640;
+const LIVE_JPEG_QUALITY = 0.8;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function cameraErrorMessage(e) {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return "The camera needs a secure page: open the app at http://localhost:5173 or over https.";
+  }
+  switch (e?.name) {
+    case "NotAllowedError": return "Camera access was blocked. Allow it for this page and try again.";
+    case "NotFoundError": return "No camera was found on this device.";
+    case "NotReadableError": return "The camera is in use by another program.";
+    default: return `The camera could not be started${e?.message ? `: ${e.message}` : "."}`;
+  }
+}
+
+// Draws the current video frame on `canvas`, scaled to at most `maxSide`.
+// Returns false until the video has a picture.
+function drawVideoFrame(video, canvas, maxSide) {
+  if (!video || video.readyState < 2 || !video.videoWidth) return false;
+  const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
+  const w = Math.max(1, Math.round(video.videoWidth * scale));
+  const h = Math.max(1, Math.round(video.videoHeight * scale));
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  canvas.getContext("2d", { willReadFrequently: true }).drawImage(video, 0, 0, w, h);
+  return true;
+}
+
+const canvasToJpeg = (canvas, quality = LIVE_JPEG_QUALITY) =>
+  new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+
+// The operation list for one live frame: the applied steps plus the tool being
+// adjusted, so the sliders show their effect on the camera view. Crop is
+// left out (its rectangle belongs to a still image); a detection tool already
+// applied last is replaced, as Apply would do.
+function liveOps(ops, tool, params, neutral) {
+  if (!tool || tool === "crop" || neutral) return ops;
+  const op = { type: tool, params: opParams(tool, params) };
+  const last = ops[ops.length - 1];
+  return APPLY_ONLY.has(tool) && last?.type === tool ? [...ops.slice(0, -1), op] : [...ops, op];
+}
 
 function defaultParams(tool, img) {
   const w = img ? img.width : 1, h = img ? img.height : 1;
@@ -509,7 +582,9 @@ function defaultParams(tool, img) {
       direction: "all", polarity: "bright", threshold: 300,
       hessian_sigma: 2, ridge_threshold: 8,
     };
-    case "edge_detection": return { show: "edges", sigma: 1.4, canny_low: 50, canny_high: 150 };
+    case "edge_detection": return {
+      method: "canny", show: "edges", sigma: 1.4, canny_low: 50, canny_high: 150, threshold: 80,
+    };
     default: return {};
   }
 }
@@ -710,8 +785,23 @@ function formulaTex(tool, params, img) {
           return null;
       }
     }
-    case "edge_detection":
-      return `\\begin{aligned} M&=|\\nabla(G_{${fmt(params.sigma, 1)}}*f)|,\\quad \\alpha=\\angle\\nabla f\\\\ \\text{NMS: keep }M&\\text{ only at a local max along }\\alpha\\\\ M\\ge T_{H}=${params.canny_high}&\\ \\text{ or }\\ (T_{L}=${params.canny_low}\\le M<T_{H}\\ \\text{ and linked to a strong edge}) \\end{aligned}`;
+    case "edge_detection": {
+      const s = fmt(params.sigma, 1);
+      const mask = (rows) => `\\begin{bmatrix}${rows}\\end{bmatrix}`;
+      if (params.method === "prewitt") {
+        return `\\begin{aligned} M&=|\\nabla(G_{${s}}*f)|,\\quad \\text{edge if }M\\ge T=${params.threshold}\\\\ w_x&=${mask("-1&0&1\\\\ -1&0&1\\\\ -1&0&1")},\\; w_y=${mask("-1&-1&-1\\\\ 0&0&0\\\\ 1&1&1")} \\end{aligned}`;
+      }
+      if (params.method === "roberts") {
+        return `\\begin{aligned} M&=|\\nabla(G_{${s}}*f)|,\\quad \\text{edge if }M\\ge T=${params.threshold}\\\\ w_x&=${mask("1&0\\\\ 0&-1")},\\; w_y=${mask("0&1\\\\ -1&0")} \\end{aligned}`;
+      }
+      if (params.method === "log") {
+        return `\\begin{aligned} r&=\\nabla^{2}(G_{${s}}*f)\\\\ \\text{edge if }&r\\text{ changes sign and }|r_a-r_b|\\ge T=${params.threshold} \\end{aligned}`;
+      }
+      if (params.method === "sobel") {
+        return `\\begin{aligned} M&=|\\nabla(G_{${s}}*f)|,\\quad \\text{edge if }M\\ge T=${params.threshold}\\\\ w_x&=${mask("-1&0&1\\\\ -2&0&2\\\\ -1&0&1")},\\; w_y=${mask("-1&-2&-1\\\\ 0&0&0\\\\ 1&2&1")} \\end{aligned}`;
+      }
+      return `\\begin{aligned} M&=|\\nabla(G_{${s}}*f)|,\\quad \\alpha=\\angle\\nabla f\\\\ \\text{NMS: keep }M&\\text{ only at a local max along }\\alpha\\\\ M\\ge T_{H}=${params.canny_high}&\\ \\text{ or }\\ (T_{L}=${params.canny_low}\\le M<T_{H}\\ \\text{ and linked to a strong edge}) \\end{aligned}`;
+    }
     default:
       return null;
   }
@@ -822,7 +912,7 @@ function pixelChannels(img, x, y) {
   return [d[i], d[i + 1], d[i + 2]];
 }
 
-function ImageCanvas({ image, label, note, overlay, footer, probeBefore }) {
+function ImageCanvas({ image, label, note, overlay, footer, probeBefore, bare }) {
   const ref = useRef(null);
   const [hit, setHit] = useState(null);
   useEffect(() => {
@@ -847,11 +937,13 @@ function ImageCanvas({ image, label, note, overlay, footer, probeBefore }) {
     : `(${hit.x}, ${hit.y})  ${hit.rgb.join(", ")}`;
 
   return (
-    <figure className="frame">
-      <figcaption>
-        <span>{label}</span>
-        {note && <span className="note">{note}</span>}
-      </figcaption>
+    <figure className={"frame" + (bare ? " bare" : "")}>
+      {!bare && (
+        <figcaption>
+          <span>{label}</span>
+          {note && <span className="note">{note}</span>}
+        </figcaption>
+      )}
       <div className="frame-body">
         <div
           className={"canvas-wrap" + (probeBefore ? " probe" : "")}
@@ -862,33 +954,9 @@ function ImageCanvas({ image, label, note, overlay, footer, probeBefore }) {
           {overlay}
         </div>
       </div>
-      {probeBefore && <p className="pixel-probe">{probeText}</p>}
-      {footer && <div className="frame-foot">{footer}</div>}
+      {!bare && probeBefore && <p className="pixel-probe">{probeText}</p>}
+      {!bare && footer && <div className="frame-foot">{footer}</div>}
     </figure>
-  );
-}
-
-function Histogram({ image }) {
-  const s = useMemo(() => (image ? stats(image) : null), [image]);
-  if (!s) return null;
-  const max = Math.max(...s.hist);
-  const pts = s.hist.map((v, k) => `${k},${100 - (v / max) * 100}`).join(" ");
-  return (
-    <section className="panel">
-      <h3>Histogram of result</h3>
-      <svg viewBox="0 0 255 100" preserveAspectRatio="none" className="hist" role="img"
-        aria-label="Luma histogram of the processed image">
-        <polygon points={`0,100 ${pts} 255,100`} />
-        <line x1={s.mean} x2={s.mean} y1="0" y2="100" className="mean-line" />
-      </svg>
-      <div className="axis"><span>0</span><span>255</span></div>
-      <dl className="stats">
-        <div><dt>Mean μ</dt><dd>{fmt(s.mean, 1)}</dd></div>
-        <div><dt>Median</dt><dd>{s.median}</dd></div>
-        <div><dt>Std σ</dt><dd>{fmt(s.std, 1)}</dd></div>
-      </dl>
-      <p className="hint">Equations (12)–(14). The vertical line marks the mean.</p>
-    </section>
   );
 }
 
@@ -932,7 +1000,12 @@ function opLabel(op) {
     case "denoise_gamma": return `Remove Gamma, ${p.size}×${p.size}`;
     case "corner_detection": return `Corner detection (Harris)${p.show === "response" ? ", response map" : ""}`;
     case "line_detection": return `Line detection (${LINE_METHODS[p.method]?.short || p.method})${p.show === "hough" ? ", Hough space" : ""}`;
-    case "edge_detection": return `Canny edges, σ = ${fmt(p.sigma, 1)}, $T_{L}$ = ${p.canny_low}, $T_{H}$ = ${p.canny_high}`;
+    case "edge_detection": {
+      const name = EDGE_METHODS[p.method]?.short || "Canny";
+      return p.method && p.method !== "canny"
+        ? `${name} edges, σ = ${fmt(p.sigma, 1)}, $T$ = ${p.threshold}`
+        : `Canny edges, σ = ${fmt(p.sigma, 1)}, $T_{L}$ = ${p.canny_low}, $T_{H}$ = ${p.canny_high}`;
+    }
     default: return op.type;
   }
 }
@@ -1084,13 +1157,30 @@ function ToolControls({ tool, params, setParams, img }) {
         </>
       )}
       {tool === "edge_detection" && (
-        <label className="select inline">
-          <span>Show</span>
-          <select value={params.show} onChange={(e) => setParams({ ...params, show: e.target.value })}>
-            <option value="edges">Edge map (white on black)</option>
-            <option value="image">Edges on the image</option>
-          </select>
-        </label>
+        <>
+          <div className="mode-row" role="tablist" aria-label="Edge detection method">
+            {Object.entries(EDGE_METHODS).map(([k, m]) => (
+              <button key={k} type="button" role="tab" aria-selected={params.method === k}
+                className={"mode" + (params.method === k ? " on" : "")}
+                onClick={() => setParams({
+                  ...params, method: k,
+                  // LoG is undefined at sigma 0
+                  sigma: k === "log" && params.sigma <= 0 ? 1 : params.sigma,
+                })}>
+                {m.short}
+              </button>
+            ))}
+          </div>
+          <p className="hint"><TexBits text={EDGE_METHODS[params.method]?.hint || ""} /></p>
+          <label className="select inline">
+            <span>Show</span>
+            <select value={params.show} onChange={(e) => setParams({ ...params, show: e.target.value })}>
+              <option value="edges">Edge map (white on black)</option>
+              <option value="response">{EDGE_METHODS[params.method]?.response || "Response"}</option>
+              <option value="image">Edges on the image</option>
+            </select>
+          </label>
+        </>
       )}
       {(tool === "band_reject" || tool === "band_pass") && (
         <label className="select inline">
@@ -1120,7 +1210,8 @@ function ToolControls({ tool, params, setParams, img }) {
         return (
           <label className="slider" key={s.key}>
             <span><span><TexBits text={s.name} /></span><output>{formatSlider(s, params[s.key])}</output></span>
-            <input type="range" min={s.min} max={sliderMax(s)} step={s.step} value={params[s.key]}
+            <input type="range" min={tool === "edge_detection" && s.key === "sigma" && params.method === "log" ? 0.1 : s.min}
+              max={sliderMax(s)} step={s.step} value={params[s.key]}
               disabled={disabled}
               onChange={(e) => setParam(s.key, Number(e.target.value))} />
           </label>
@@ -1166,7 +1257,6 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [log, setLog] = useState([]);
   const [dragging, setDragging] = useState(false);
   const [backend, setBackend] = useState("checking");
   const [busy, setBusy] = useState(false);
@@ -1176,6 +1266,8 @@ export default function App() {
   const [sampleIndex, setSampleIndex] = useState(0);
   const [selectedSampleId, setSelectedSampleId] = useState("");
   const [sampleLoading, setSampleLoading] = useState(false);
+  // "edit" stacks tools on one image; "compare" tries up to five tools side by side
+  const [view, setView] = useState("edit");
   const fileRef = useRef(null);
   const timer = useRef(0);
   const toolsRef = useRef(null);
@@ -1183,7 +1275,16 @@ export default function App() {
   // the result image whose Apply should leave the sliders alone (detection tools)
   const keepFor = useRef(null);
 
-  useEffect(() => onRequest((e) => setLog((l) => [e, ...l].slice(0, 100))), []);
+  // live camera: `live` while frames are being processed, `liveView` holds the
+  // latest raw frame and its result for the two canvases
+  const [live, setLive] = useState(false);
+  const [liveView, setLiveView] = useState(null);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const grabRef = useRef(null);
+  // the loop reads the newest steps and sliders from here instead of restarting
+  const liveState = useRef({});
+
   useEffect(() => onStatus(setBackend), []);
   useEffect(() => { checkBackend(); }, []);
 
@@ -1264,11 +1365,125 @@ export default function App() {
   }
 
   const neutral = isNeutral(tool, params, committed);
+  liveState.current = { ops, tool, params, neutral };
+
+  // The camera loop: grab a frame, send it with the current steps, show the
+  // result, and only then grab the next one. Frames that arrive while the
+  // backend is busy are never queued, so the picture stays current and the
+  // delay does not grow when a filter is slow.
+  useEffect(() => {
+    if (!live) return undefined;
+    let alive = true;
+    let smoothed = null;
+    let failing = false;
+    (async () => {
+      const canvas = grabRef.current || (grabRef.current = document.createElement("canvas"));
+      while (alive) {
+        if (document.hidden) { await sleep(300); continue; }
+        const started = performance.now();
+        try {
+          if (!drawVideoFrame(videoRef.current, canvas, LIVE_MAX_SIDE)) { await sleep(50); continue; }
+          const src = canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height);
+          const frame = await canvasToJpeg(canvas);
+          const s = liveState.current;
+          const out = await processFrame(frame, liveOps(s.ops, s.tool, s.params, s.neutral));
+          if (!alive) break;
+          const ms = performance.now() - started;
+          smoothed = smoothed === null ? ms : smoothed * 0.8 + ms * 0.2;
+          setLiveView({ src, out, ms: Math.round(smoothed) });
+          if (failing) { failing = false; setError(""); }
+        } catch (e) {
+          if (!alive) break;
+          failing = true;
+          setError(e.message);
+          await sleep(800);  // do not hammer the backend with a request that keeps failing
+        }
+        await sleep(0);
+      }
+    })();
+    return () => { alive = false; };
+  }, [live]);
+
+  // leaving the page releases the camera
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+  }, []);
+
+  function stopCamera() {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setLive(false);
+    setLiveView(null);
+  }
+
+  // Opens the camera. With no image loaded yet, the first frame becomes the
+  // image, so the tools panel appears and the steps have a picture to refer to.
+  async function startCamera() {
+    setError("");
+    if (backend !== "server") {
+      setError("The live camera needs the backend. Start it and reload the page.");
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+    } catch (e) {
+      setError(cameraErrorMessage(e));
+      return;
+    }
+    const video = videoRef.current;
+    streamRef.current = stream;
+    video.srcObject = stream;
+    try {
+      await video.play();
+      while (video.readyState < 2) await sleep(30);
+      if (!original) {
+        const canvas = document.createElement("canvas");
+        drawVideoFrame(video, canvas, LIVE_MAX_SIDE);
+        const blob = await canvasToJpeg(canvas, 0.95);
+        const { imageId: id, image } = await upload(new File([blob], "camera.jpg", { type: "image/jpeg" }));
+        start(id, image, "Live camera. Press Capture frame to keep a still image.", "camera");
+      }
+      setLive(true);
+    } catch (e) {
+      stopCamera();
+      setError(e.message || cameraErrorMessage(e));
+    }
+  }
+
+  // Keeps the current camera frame as the image to work on, and stops the camera.
+  async function captureFrame() {
+    const video = videoRef.current;
+    const canvas = document.createElement("canvas");
+    if (!drawVideoFrame(video, canvas, 1600)) return;
+    setBusy(true);
+    try {
+      const blob = await canvasToJpeg(canvas, 0.95);
+      const { imageId: id, image } = await upload(new File([blob], "camera.jpg", { type: "image/jpeg" }));
+      stopCamera();
+      start(id, image, "Captured from the camera.", "camera");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // live preview of the tool being adjusted
   useEffect(() => {
     if (!committed) return;
     clearTimeout(timer.current);
+    // the camera view already shows the tool on every frame
+    if (live) {
+      previewReq.current += 1;
+      setPreview(null);
+      setComputing(false);
+      return;
+    }
     // line, edge and corner detection run only from Apply, not from the sliders
     if (APPLY_ONLY.has(tool)) {
       previewReq.current += 1;
@@ -1315,7 +1530,7 @@ export default function App() {
       timer.current = setTimeout(run, 0);
     }
     return () => clearTimeout(timer.current);
-  }, [committed, tool, params, neutral, dirty, backend, imageId, ops]);
+  }, [committed, tool, params, neutral, dirty, backend, imageId, ops, live]);
 
   function start(id, img, note = "", name = "image", sampleId = "") {
     setImageId(id);
@@ -1332,6 +1547,7 @@ export default function App() {
 
   async function handleFile(file) {
     if (!file) return;
+    stopCamera();
     try {
       const { imageId: id, image, scaled } = await upload(file);
       start(id, image, scaled ? "Large image: reduced to 1600 px on the longest side." : "", file.name);
@@ -1341,6 +1557,7 @@ export default function App() {
   }
 
   async function loadBuiltin(sample) {
+    stopCamera();
     setSampleLoading(true);
     setError("");
     try {
@@ -1354,6 +1571,7 @@ export default function App() {
   }
 
   async function loadSample() {
+    stopCamera();
     try {
       const { imageId: id, image } = await uploadSample(sampleImage());
       start(id, image, "", "sample");
@@ -1456,12 +1674,16 @@ export default function App() {
 
   const t = tool ? TOOLS[tool] : null;
   const cat = CATEGORIES.find((c) => c.id === category);
-  const shown = preview || committed;
-  const processedNote = computing
-    ? "Computing preview…"
-    : preview
-      ? `Preview ${preview.width}×${preview.height}, not applied`
-      : committed ? `${committed.width}×${committed.height} · ${ops.length} step${ops.length === 1 ? "" : "s"}` : "";
+  const liveShown = live && liveView;
+  const shown = liveShown ? liveView.out : preview || committed;
+  const originalShown = liveShown ? liveView.src : original;
+  const processedNote = liveShown
+    ? `Live · ${(1000 / Math.max(liveView.ms, 1)).toFixed(1)} fps · ${liveView.ms} ms per frame`
+    : computing
+      ? "Computing preview…"
+      : preview
+        ? `Preview ${preview.width}×${preview.height}, not applied`
+        : committed ? `${committed.width}×${committed.height} · ${ops.length} step${ops.length === 1 ? "" : "s"}` : "";
 
   const exportFooter = committed && (
     <>
@@ -1476,12 +1698,14 @@ export default function App() {
             ))}
           </select>
         </label>
-        <button className="primary grow" onClick={handleExport} disabled={busy}>Download result</button>
+        <button className="primary grow" onClick={handleExport} disabled={busy || live}>Download result</button>
       </div>
       <p className="hint">
-        {preview || (tool === "crop" && !neutral)
-          ? "Downloads the applied steps only. Apply or cancel the current change first."
-          : exported || `Saves the result of ${ops.length} applied step${ops.length === 1 ? "" : "s"}.`}
+        {live
+          ? "Press Capture frame to keep a still image, then download it."
+          : preview || (tool === "crop" && !neutral)
+            ? "Downloads the applied steps only. Apply or cancel the current change first."
+            : exported || `Saves the result of ${ops.length} applied step${ops.length === 1 ? "" : "s"}.`}
       </p>
     </>
   );
@@ -1501,6 +1725,14 @@ export default function App() {
           {backend === "server" ? "Backend connected" : backend === "checking" ? "Checking backend…" : "Backend offline: simulated in browser"}
         </span>
       </header>
+
+      <div className="view-switch" role="tablist" aria-label="View">
+        <button type="button" role="tab" aria-selected={view === "edit"}
+          className={view === "edit" ? "on" : ""} onClick={() => setView("edit")}>Edit</button>
+        <button type="button" role="tab" aria-selected={view === "compare"}
+          className={view === "compare" ? "on" : ""}
+          onClick={() => { stopCamera(); setView("compare"); }}>Compare</button>
+      </div>
 
       <SampleCarousel
         index={sampleIndex}
@@ -1523,9 +1755,32 @@ export default function App() {
             <div className="row">
               <button className="primary" onClick={() => fileRef.current.click()}>Choose image</button>
               <button onClick={loadSample}>Use generated test image</button>
+              <button onClick={startCamera} disabled={backend !== "server"}
+                title={backend !== "server" ? "The live camera needs the backend" : undefined}>Use camera</button>
             </div>
             {error && <p className="error" role="alert">{error}</p>}
           </div>
+        </main>
+      ) : view === "compare" ? (
+        <main className="compare-page">
+          {notice && <p className="notice">{notice}</p>}
+          <div className="row">
+            <button onClick={() => fileRef.current.click()}>Load another image</button>
+          </div>
+          {error && <p className="error" role="alert">{error}</p>}
+          <ComparePanel
+            imageId={imageId}
+            baseImage={committed}
+            ops={ops}
+            backend={backend}
+            tools={TOOLS}
+            categories={CATEGORIES}
+            defaultParams={defaultParams}
+            opParams={opParams}
+            ToolControls={ToolControls}
+            opLabel={opLabel}
+            ImageCanvas={ImageCanvas}
+          />
         </main>
       ) : (
         <main className={"work" + (toolsOpen ? "" : " tools-closed")}>
@@ -1589,8 +1844,11 @@ export default function App() {
 
                         <ToolControls tool={tool} params={params} setParams={editParams} img={committed} />
 
-                        {APPLY_ONLY.has(tool) && (
+                        {APPLY_ONLY.has(tool) && !live && (
                           <p className="hint">The image updates only when you press Apply. Pressing Apply again replaces this step.</p>
+                        )}
+                        {live && (
+                          <p className="hint">Live: the camera view follows these controls. Apply adds the step to the history.</p>
                         )}
                         <div className="row">
                           <button className="primary" onClick={apply} disabled={neutral || busy}>Apply {t.label.toLowerCase()}</button>
@@ -1619,7 +1877,22 @@ export default function App() {
               <h3 className="gap">Image</h3>
               <div className="row">
                 <button onClick={() => fileRef.current.click()}>Load another image</button>
+                {live ? (
+                  <>
+                    <button className="primary" onClick={captureFrame} disabled={busy}>Capture frame</button>
+                    <button onClick={stopCamera}>Stop camera</button>
+                  </>
+                ) : (
+                  <button onClick={startCamera} disabled={backend !== "server"}
+                    title={backend !== "server" ? "The live camera needs the backend" : undefined}>Start camera</button>
+                )}
               </div>
+              {live && (
+                <p className="hint">
+                  The camera runs live at up to {LIVE_MAX_SIDE} px. The applied steps and the tool you are adjusting
+                  are processed on every frame; slow filters lower the frame rate.
+                </p>
+              )}
               {error && <p className="error" role="alert">{error}</p>}
             </div>
           </aside>
@@ -1628,7 +1901,11 @@ export default function App() {
             <section className="canvases">
               {notice && <p className="notice">{notice}</p>}
               <div className="pair">
-                <ImageCanvas image={original} label="Original" note={`${original.width}×${original.height}`} />
+                <ImageCanvas
+                  image={originalShown}
+                  label={liveShown ? "Camera" : "Original"}
+                  note={`${originalShown.width}×${originalShown.height}`}
+                />
                 <ImageCanvas
                   image={shown}
                   label="Processed"
@@ -1643,34 +1920,13 @@ export default function App() {
               {tool === "crop" && <p className="hint">Drag on the processed image to select the area to keep.</p>}
             </section>
 
-            <div className="bottom">
-              <Histogram image={shown} />
-              <section className="panel log">
-                <h3>Requests to backend</h3>
-                <p className="hint">
-                  {backend === "server"
-                    ? "Live requests to the FastAPI backend. Previews stay local until you apply."
-                    : "Simulated requests: what the frontend will send once the backend is running."}
-                </p>
-                <ul>
-                  {log.map((e) => (
-                    <li key={e.id}>
-                      <div className="req">
-                        <span className="method">{e.method}</span>
-                        <span className="path">{e.path}</span>
-                        <span className={"code" + (e.status >= 400 ? " bad" : "")}>{e.status}</span>
-                        <span className="ms">{e.ms} ms</span>
-                      </div>
-                      {e.body && <code>{e.body}</code>}
-                      <code className="res">{e.result}</code>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            </div>
           </div>
         </main>
       )}
+
+      {/* the camera feed; drawn from here onto a canvas, never shown itself */}
+      <video ref={videoRef} muted playsInline aria-hidden="true"
+        style={{ position: "fixed", width: 1, height: 1, opacity: 0, pointerEvents: "none" }} />
 
       <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/tiff,.tif,.tiff" hidden
         onChange={(e) => { handleFile(e.target.files[0]); e.target.value = ""; }} />

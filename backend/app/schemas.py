@@ -226,20 +226,26 @@ class LineDetectionParams(BaseModel):
 
 
 class EdgeDetectionParams(BaseModel):
-    """Canny edge detection (Gonzalez & Woods Sec. 10.2). No ML."""
+    """Classical edge detection, no ML. Canny reads T_L and T_H; the other
+    methods read the single threshold (a magnitude, or the zero-crossing
+    slope for LoG)."""
 
-    show: Literal["edges", "image"] = Field(
+    method: Literal["sobel", "prewitt", "roberts", "log", "canny"] = "canny"
+    show: Literal["edges", "response", "image"] = Field(
         default="edges",
-        description="White edges on black, or red edges on the dimmed colour image",
+        description="White edges on black, the normalised detector response, or red edges on the dimmed colour image",
     )
-    sigma: float = Field(default=1.4, ge=0, le=5, description="Gaussian sigma before Canny")
+    sigma: float = Field(default=1.4, ge=0, le=5, description="Gaussian sigma (0 skips the smoothing; LoG needs it above 0)")
     canny_low: float = Field(default=50, ge=0, le=1000, description="Canny low threshold T_L")
     canny_high: float = Field(default=150, ge=1, le=1000, description="Canny high threshold T_H")
+    threshold: float = Field(default=80, ge=0, le=4000, description="Gradient magnitude, or the zero-crossing slope for LoG")
 
     @model_validator(mode="after")
     def consistent(self):
-        if self.canny_low >= self.canny_high:
+        if self.method == "canny" and self.canny_low >= self.canny_high:
             raise ValueError("Canny T_L must be smaller than T_H.")
+        if self.method == "log" and self.sigma <= 0:
+            raise ValueError("LoG needs a Gaussian sigma above 0.")
         return self
 
 
@@ -472,6 +478,12 @@ Operation = Annotated[
 
 class ProcessRequest(BaseModel):
     image_id: str
+    operations: list[Operation] = Field(default_factory=list, max_length=50)
+
+
+class FrameOperations(BaseModel):
+    """The operation list of /process-frame, sent as a JSON string next to the frame."""
+
     operations: list[Operation] = Field(default_factory=list, max_length=50)
 
 

@@ -15,10 +15,19 @@ Line detection offers six methods, chosen with `method`:
   hessian  Steger's ridge detector: Hessian of the Gaussian-smoothed image,
            line points where the derivative along the normal vanishes.
 
-Edge detection is Canny (G&W Sec. 10.2): the project's own Gaussian, then
-OpenCV's Sobel gradient, non-maximum suppression and hysteresis.
-show="edges" is the white edge map; show="image" draws those edges in red
-on the dimmed colour image.
+Edge detection offers five classical methods, chosen with `method`:
+
+  sobel    3x3 gradient, the centre pixel weighted twice.
+  prewitt  the same 3x3 gradient without that extra weight.
+  roberts  2x2 diagonal differences, the simplest and the noisiest.
+  log      Laplacian of a Gaussian; an edge is a zero crossing whose
+           slope reaches the threshold (Marr-Hildreth).
+  canny    the project's own Gaussian, then OpenCV's Sobel, non-maximum
+           suppression and hysteresis.
+
+show="edges" is the white edge map, show="response" is what the detector
+measures (normalised), show="image" draws the edges in red on the dimmed
+colour image.
 
 Corner detection implements Harris & Stephens (1988): Sobel derivatives,
 a Gaussian-windowed second-moment matrix M, the response
@@ -38,6 +47,7 @@ import numpy as np
 from scipy.ndimage import convolve as _convolve
 from scipy.ndimage import correlate as _correlate
 from scipy.ndimage import gaussian_filter as _gaussian
+from scipy.ndimage import gaussian_laplace as _gaussian_laplace
 from scipy.ndimage import maximum_filter as _max_filter
 
 from .basic import L, luma
@@ -46,6 +56,18 @@ from .geometry import OperationError
 
 _SOBEL_X = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float64)
 _SOBEL_Y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float64)
+_PREWITT_X = np.array([[-1, 0, 1], [-1, 0, 1], [-1, 0, 1]], dtype=np.float64)
+_PREWITT_Y = np.array([[-1, -1, -1], [0, 0, 0], [1, 1, 1]], dtype=np.float64)
+# 2x2 diagonal differences. For an even kernel SciPy puts the origin on the
+# pixel just below and to the right of the true centre.
+_ROBERTS_X = np.array([[1, 0], [0, -1]], dtype=np.float64)
+_ROBERTS_Y = np.array([[0, 1], [-1, 0]], dtype=np.float64)
+GRADIENT_KERNELS = {
+    "sobel": (_SOBEL_X, _SOBEL_Y),
+    "prewitt": (_PREWITT_X, _PREWITT_Y),
+    "roberts": (_ROBERTS_X, _ROBERTS_Y),
+}
+EDGE_METHODS = ("sobel", "prewitt", "roberts", "log", "canny")
 
 # G&W line-detection masks. The image y axis points down, so the "+45"
 # mask (rising line, /) has its 2s on the anti-diagonal.
@@ -86,14 +108,46 @@ def _to_u8(gray: np.ndarray) -> np.ndarray:
     return np.clip(np.floor(gray + 0.5), 0, L - 1).astype(np.uint8)
 
 
+def _smooth(gray: np.ndarray, sigma: float) -> np.ndarray:
+    return gaussian_blur(gray[..., None], sigma)[..., 0] if sigma > 0 else gray
+
+
+def gradient_magnitude(gray: np.ndarray, kx: np.ndarray, ky: np.ndarray) -> np.ndarray:
+    """sqrt(gx^2 + gy^2) for one pair of derivative masks (reflection border)."""
+    return np.hypot(_convolve(gray, kx, mode="mirror"), _convolve(gray, ky, mode="mirror"))
+
+
+def gradient_edges(gray: np.ndarray, method: str, threshold: float, sigma: float):
+    """First-derivative edges: optional Gaussian, then M = |gradient| >= T.
+    Returns (edge map, magnitude). Sobel, Prewitt and Roberts differ only
+    in the masks, so the same threshold means different things for each."""
+    mag = gradient_magnitude(_smooth(gray, sigma), *GRADIENT_KERNELS[method])
+    return mag >= threshold, mag
+
+
+def log_edges(gray: np.ndarray, sigma: float, threshold: float):
+    """Marr-Hildreth: r = laplacian of a Gaussian. A pixel is an edge where r
+    changes sign between it and a 4-neighbour and the slope |r_a - r_b|
+    reaches the threshold, so a flat zero crossing from noise is dropped.
+    Returns (edge map, |r|)."""
+    response = _gaussian_laplace(gray, max(sigma, 1e-3), mode="mirror")
+    edges = np.zeros(gray.shape, dtype=bool)
+    # no wrap-around: a sign change is checked only against the real neighbour
+    pairs = ((response[:, 1:], response[:, :-1], (slice(None), slice(1, None)), (slice(None), slice(None, -1))),
+             (response[1:, :], response[:-1, :], (slice(1, None), slice(None)), (slice(None, -1), slice(None))))
+    for a, b, at_a, at_b in pairs:
+        crosses = (a * b < 0) & (np.abs(a - b) >= threshold)
+        edges[at_a] |= crosses
+        edges[at_b] |= crosses
+    return edges, np.abs(response)
+
+
 def canny_edges(gray: np.ndarray, sigma: float, low: float, high: float) -> np.ndarray:
     """Canny edge map (G&W Sec. 10.2): Gaussian smoothing with sigma (the
     project's own kernel), then OpenCV's Canny: Sobel gradient with the
     exact magnitude sqrt(gx^2 + gy^2), non-maximum suppression and
     hysteresis thresholding with T_L = low, T_H = high."""
-    if sigma > 0:
-        gray = gaussian_blur(gray[..., None], sigma)[..., 0]
-    return cv2.Canny(_to_u8(gray), low, high, L2gradient=True) > 0
+    return cv2.Canny(_to_u8(_smooth(gray, sigma)), low, high, L2gradient=True) > 0
 
 
 def harris_response(gray: np.ndarray, sigma: float = 1.0, k: float = 0.04) -> np.ndarray:
@@ -365,15 +419,28 @@ def line_detection(rgb: np.ndarray, method: str = "sht", show: str = "image",
     return canvas.astype(np.float64)
 
 
-def edge_detection(rgb: np.ndarray, show: str = "edges", sigma: float = 1.4,
-                   canny_low: float = 50, canny_high: float = 150) -> np.ndarray:
-    """Canny edges (G&W Sec. 10.2). Gaussian smoothing uses this project's
-    kernel; Sobel, non-maximum suppression and hysteresis are OpenCV's
-    (exact gradient magnitude). show="edges" is white edges on black;
-    show="image" draws them in red on the dimmed colour image."""
-    if show not in ("edges", "image"):
+def edge_detection(rgb: np.ndarray, method: str = "canny", show: str = "edges",
+                   sigma: float = 1.4, canny_low: float = 50, canny_high: float = 150,
+                   threshold: float = 80) -> np.ndarray:
+    """Classical edges, no learning. See the module docstring for the methods.
+
+    show="edges" is white on black, show="response" is the normalised
+    strength the method measures, show="image" draws the edges in red on
+    the dimmed colour image."""
+    if method not in EDGE_METHODS:
+        raise OperationError(f"Unknown edge detection method: {method}")
+    if show not in ("edges", "response", "image"):
         raise OperationError(f"Unknown edge detection view: {show}")
-    edges = canny_edges(luma(rgb), sigma, canny_low, canny_high)
+    gray = luma(rgb)
+    if method == "canny":
+        edges = canny_edges(gray, sigma, canny_low, canny_high)
+        strength = sobel_magnitude(_smooth(gray, sigma))
+    elif method == "log":
+        edges, strength = log_edges(gray, sigma, threshold)
+    else:
+        edges, strength = gradient_edges(gray, method, threshold, sigma)
+    if show == "response":
+        return _as_rgb_u8(_normalised(strength)).astype(np.float64)
     if show == "edges":
         return _as_rgb_u8(edges * float(L - 1)).astype(np.float64)
     canvas = np.ascontiguousarray(np.clip(np.floor(rgb * DIM + 0.5), 0, L - 1).astype(np.uint8))
