@@ -5,6 +5,8 @@
 //   POST /upload   multipart "file"       -> { image_id, width, height, scaled, source_format }
 //   GET  /images/{id}/original            -> image/png
 //   POST /process  { image_id, operations }-> image/png
+//   POST /process-frame  multipart "file" (JPEG) + "operations" (JSON) -> image/jpeg
+//                         one camera frame, nothing stored (live camera)
 //   POST /export   { image_id, operations, format, quality } -> file
 //
 // On start the client checks /health. If the backend is not running, it
@@ -170,6 +172,25 @@ async function serverProcess(imageId, operations) {
     ms: Math.round(performance.now() - t0),
   });
   return image;
+}
+
+/**
+ * Process one camera frame on the backend (live camera). `frame` is a JPEG
+ * blob. Nothing is stored and, unlike the other calls, nothing is added to
+ * the request log: this runs many times a second.
+ */
+export async function processFrame(frame, operations) {
+  const form = new FormData();
+  form.append("file", frame, "frame.jpg");
+  form.append("operations", JSON.stringify(operations));
+  let r;
+  try {
+    r = await fetch(`${API_URL}/process-frame`, { method: "POST", body: form });
+  } catch {
+    throw unreachable();
+  }
+  if (!r.ok) throw new Error(await errorMessage(r));
+  return blobToImageData(await r.blob());
 }
 
 // ---------- mock mode (no backend running) ----------

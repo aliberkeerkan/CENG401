@@ -750,6 +750,52 @@ def test_canny_edges_lie_on_the_square_and_thin_out_as_the_high_threshold_rises(
         detection.edge_detection(img, show="hough")
 
 
+def _square(h=80, w=100, y0=20, y1=60, x0=25, x1=75, lo=40.0, hi=220.0):
+    img = np.full((h, w, 3), lo)
+    img[y0:y1, x0:x1] = hi
+    return img
+
+
+@pytest.mark.parametrize("method", ["sobel", "prewitt", "roberts", "log"])
+def test_gradient_and_log_edges_follow_the_square(method):
+    y0, y1, x0, x1 = 20, 60, 25, 75
+    img = _square()
+    out = detection.edge_detection(img, method=method, show="edges", sigma=1.0, threshold=20)
+    white = out[..., 0] > 200
+    ys, xs = np.nonzero(white)
+    assert ys.size > 40, method
+    assert np.mean(_on_square_border(ys, xs, y0, y1, x0, x1)) > 0.85, method
+    flat = np.full((40, 50, 3), 100.0)
+    assert not (detection.edge_detection(flat, method=method, show="edges", sigma=1.0, threshold=20) > 0).any()
+    again = detection.edge_detection(img, method=method, show="edges", sigma=1.0, threshold=20)
+    assert np.array_equal(out, again)
+    # the response view is the strength, not a binary map: more than two levels
+    response = detection.edge_detection(img, method=method, show="response", sigma=1.0, threshold=20)
+    assert len(np.unique(response[..., 0])) > 2
+
+
+def test_roberts_reports_more_false_edges_than_sobel_in_noise():
+    rng = np.random.default_rng(0)
+    img = _square() + rng.normal(0, 18, _square().shape)
+    y0, y1, x0, x1 = 20, 60, 25, 75
+
+    def off_border(method, threshold):
+        out = detection.edge_detection(img, method=method, sigma=0, threshold=threshold)
+        white = out[..., 0] > 200
+        ys, xs = np.nonzero(white)
+        return int((~_on_square_border(ys, xs, y0, y1, x0, x1, tol=3)).sum())
+
+    # thresholds chosen so both still see the square; Roberts, looking at two
+    # pixels, keeps far more of the noise
+    assert off_border("roberts", 40) > 2 * off_border("sobel", 120)
+
+
+def test_unknown_edge_method_is_rejected():
+    img = _square()
+    with pytest.raises(geometry.OperationError):
+        detection.edge_detection(img, method="kirsch")
+
+
 # ---------- Harris-Stephens corner detection ----------
 
 def _brute_harris_response(gray, sigma, k):

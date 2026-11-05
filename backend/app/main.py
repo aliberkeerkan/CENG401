@@ -4,18 +4,23 @@ Run:  uvicorn app.main:app --reload
 Docs: http://localhost:8000/docs
 """
 
+import json
 import os
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from pydantic import ValidationError
 
 from .imaging import io as imgio
 from .imaging.ops import OPERATIONS, OperationError, run_pipeline
-from .schemas import ExportRequest, ProcessRequest, UploadResponse
+from .schemas import ExportRequest, FrameOperations, ProcessRequest, UploadResponse
 from .storage import store
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_FRAME_BYTES = 8 * 1024 * 1024  # one camera frame (JPEG), sent many times a second
+FRAME_JPEG_QUALITY = 80
 
 app = FastAPI(title="Image Lab API", version="0.1.0")
 
@@ -91,6 +96,37 @@ def process(req: ProcessRequest):
     item = _get(req.image_id)
     rgb, alpha = _run(item, req.operations)
     return Response(imgio.encode_png(rgb, alpha), media_type="image/png")
+
+
+@app.post("/process-frame", response_class=Response)
+async def process_frame(file: UploadFile = File(...), operations: str = Form("[]")):
+    """Process one camera frame: the live camera view calls this many times a second.
+
+    Nothing is stored. The frame (JPEG or PNG) comes with the full operation
+    list as a JSON string, the same list /process takes, and the result is
+    returned as JPEG, which encodes in a few milliseconds where PNG takes tens.
+    """
+    data = await file.read()
+    if len(data) > MAX_FRAME_BYTES:
+        raise HTTPException(413, "The frame is larger than 8 MB.")
+    try:
+        ops = FrameOperations.model_validate({"operations": json.loads(operations)}).operations
+    except json.JSONDecodeError as e:
+        raise HTTPException(422, "Invalid operation list: not valid JSON.") from e
+    except ValidationError as e:
+        first = e.errors()[0]
+        message = str(first["msg"]).removeprefix("Value error, ")
+        raise HTTPException(422, f"Invalid operation list: {message}") from e
+    try:
+        rgb, alpha, _, _ = imgio.decode(data)
+    except imgio.ImageDecodeError as e:
+        raise HTTPException(415, str(e)) from e
+    try:
+        # the pipeline is CPU work: keep the event loop free for other requests
+        out, out_alpha = await run_in_threadpool(run_pipeline, rgb, alpha, ops)
+    except OperationError as e:
+        raise HTTPException(422, str(e)) from e
+    return Response(imgio.encode(out, out_alpha, "jpeg", FRAME_JPEG_QUALITY), media_type="image/jpeg")
 
 
 @app.post("/export", response_class=Response)
