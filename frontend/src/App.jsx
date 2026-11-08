@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import {
@@ -813,28 +813,48 @@ function Formula({ tool, params, img }) {
   return <MathTex tex={tex} display={tex.startsWith("\\begin")} />;
 }
 
-function SampleCarousel({ index, onIndexChange, onSelect, loading, selectedId }) {
+function SampleCarousel({ index, onIndexChange, onSelect, loading, selectedId, feature }) {
   const n = BUILTIN_SAMPLES.length;
   const slots = [-2, -1, 0, 1, 2].map((offset) => {
     const i = (index + offset + n) % n;
     return { offset, i, sample: BUILTIN_SAMPLES[i] };
   });
   const current = BUILTIN_SAMPLES[index];
+  // In Compare the large photo is the open eye, so the arrows have to load the
+  // next sample themselves. In Edit they only bring a sample forward.
+  function step(delta) {
+    const next = (index + delta + n) % n;
+    onIndexChange(next);
+    if (feature) onSelect(BUILTIN_SAMPLES[next]);
+  }
 
   return (
     <section className="sample-carousel" aria-label="Built-in sample images">
       <div className="sample-carousel-head">
         <h3>Sample images</h3>
-        <p className="hint">Click a square to bring it forward. Click the large photo to load it.</p>
+        <p className="hint">
+          {feature
+            ? "Use the arrows or click a square to change the sample. The large photo is the one with the open eye."
+            : "Click a square to bring it forward. Click the large photo to load it."}
+        </p>
       </div>
       <div className="carousel">
         <button type="button" className="carousel-nav" aria-label="Previous sample"
-          onClick={() => onIndexChange((index - 1 + n) % n)} disabled={loading}>
+          onClick={() => step(-1)} disabled={loading}>
           ‹
         </button>
         <div className="carousel-stage">
           {slots.map(({ offset, i, sample }) => {
             const center = offset === 0;
+            if (center && feature) {
+              return (
+                <div key="compare-feature" className="carousel-card center feature" aria-label={feature.title}>
+                  {feature.image
+                    ? <ImageCanvas image={feature.image} bare />
+                    : <p className="hint compare-feature-wait">{feature.detail || "Computing…"}</p>}
+                </div>
+              );
+            }
             return (
               <button
                 key={sample.id}
@@ -844,8 +864,16 @@ function SampleCarousel({ index, onIndexChange, onSelect, loading, selectedId })
                   (center ? " center" : offset === -1 || offset === 1 ? " near" : " far") +
                   (selectedId === sample.id ? " loaded" : "")
                 }
-                aria-label={center ? `Load ${sample.label}` : `Show ${sample.label}`}
-                onClick={() => (center ? onSelect(sample) : onIndexChange(i))}
+                aria-label={center || feature ? `Load ${sample.label}` : `Show ${sample.label}`}
+                onClick={() => {
+                  if (feature) {
+                    onIndexChange(i);
+                    onSelect(sample);
+                    return;
+                  }
+                  if (center) onSelect(sample);
+                  else onIndexChange(i);
+                }}
                 disabled={loading}
               >
                 <img src={sample.url} alt={center ? sample.label : ""} draggable={false} />
@@ -854,13 +882,13 @@ function SampleCarousel({ index, onIndexChange, onSelect, loading, selectedId })
           })}
         </div>
         <button type="button" className="carousel-nav" aria-label="Next sample"
-          onClick={() => onIndexChange((index + 1) % n)} disabled={loading}>
+          onClick={() => step(1)} disabled={loading}>
           ›
         </button>
       </div>
       <div className="carousel-caption">
-        <strong>{current.label}</strong>
-        <span>{loading ? "Loading…" : current.hint}</span>
+        <strong>{feature ? feature.title : current.label}</strong>
+        <span>{feature ? feature.detail : loading ? "Loading…" : current.hint}</span>
       </div>
     </section>
   );
@@ -1268,6 +1296,8 @@ export default function App() {
   const [sampleLoading, setSampleLoading] = useState(false);
   // "edit" stacks tools on one image; "compare" tries up to five tools side by side
   const [view, setView] = useState("edit");
+  const [compareFeature, setCompareFeature] = useState(null);
+  const onCompareFeature = useCallback((feature) => setCompareFeature(feature), []);
   const fileRef = useRef(null);
   const timer = useRef(0);
   const toolsRef = useRef(null);
@@ -1740,6 +1770,11 @@ export default function App() {
         onSelect={loadBuiltin}
         loading={sampleLoading}
         selectedId={selectedSampleId}
+        feature={view === "compare" && committed ? (compareFeature || {
+          title: "Base Image",
+          detail: `${committed.width}×${committed.height}`,
+          image: committed,
+        }) : null}
       />
 
       {!original ? (
@@ -1780,6 +1815,7 @@ export default function App() {
             ToolControls={ToolControls}
             opLabel={opLabel}
             ImageCanvas={ImageCanvas}
+            onFeature={onCompareFeature}
           />
         </main>
       ) : (
