@@ -236,7 +236,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 /* Camera tab: tools on the left, one live picture on the right with the
    frame rate in its top-left corner */
 .camera-page { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1rem; align-items: start; }
-.camera-tools { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1rem); }
+/* like the Edit tools panel: stays in view and scrolls on its own, scrollbar hidden */
+.camera-tools {
+  position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1rem);
+  max-height: calc(100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  overflow-y: auto; overflow-x: hidden; scrollbar-width: none;
+}
+.camera-tools::-webkit-scrollbar { display: none; }
 .camera-tools .select { display: grid; gap: 0.3rem; margin-top: 0.2rem; }
 .camera-groups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.35rem; margin-bottom: 0.5rem; }
 .camera-groups .tool { text-align: center; padding-inline: 0.3rem; }
@@ -254,7 +260,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .camera-empty .hint { color: #8a97a3; }
 @media (max-width: 900px) {
   .camera-page { grid-template-columns: minmax(0, 1fr); }
-  .camera-tools { position: static; }
+  .camera-tools { position: static; max-height: none; overflow-y: visible; }
 }
 
 .compare-page { margin-top: 1rem; }

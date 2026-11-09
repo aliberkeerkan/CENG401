@@ -96,6 +96,7 @@ export default function CameraPanel({
   const [tool, setTool] = useState(null);
   const [params, setParams] = useState({});
 
+  const panelRef = useRef(null);
   const videoRef = useRef(null);
   const viewRef = useRef(null);
   const grabRef = useRef(null);
@@ -121,6 +122,25 @@ export default function CameraPanel({
       md?.removeEventListener?.("devicechange", refreshDevices);
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
+  }, []);
+
+  // Like the Edit tools panel: scrolling down over the panel moves the page
+  // first, until the panel is fully on screen, then the panel's content.
+  // Scrolling up empties the panel first, then the page follows.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return undefined;
+    function onWheel(e) {
+      if (e.deltaY <= 0 || getComputedStyle(panel).position !== "sticky") return;
+      const stickyTop = parseFloat(getComputedStyle(panel).top) || 0;
+      const pageEnd = document.documentElement.scrollHeight - window.innerHeight;
+      if (panel.getBoundingClientRect().top <= stickyTop + 1 || window.scrollY >= pageEnd - 1) return;
+      e.preventDefault();
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? window.innerHeight : 1;
+      window.scrollBy(0, e.deltaY * unit);
+    }
+    panel.addEventListener("wheel", onWheel, { passive: false });
+    return () => panel.removeEventListener("wheel", onWheel);
   }, []);
 
   function stop() {
@@ -224,7 +244,7 @@ export default function CameraPanel({
 
   return (
     <div className="camera-page">
-      <aside className="panel camera-tools" aria-label="Camera and tools">
+      <aside ref={panelRef} className="panel camera-tools" aria-label="Camera and tools">
         <h3>Camera</h3>
         <label className="select">
           <span>Device</span>
