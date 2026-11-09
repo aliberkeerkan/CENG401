@@ -51,7 +51,7 @@ from scipy.ndimage import gaussian_laplace as _gaussian_laplace
 from scipy.ndimage import maximum_filter as _max_filter
 
 from .basic import L, luma
-from .filters import gaussian_blur
+from .fast import gaussian_blur as fast_gaussian_blur
 from .geometry import OperationError
 
 _SOBEL_X = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float64)
@@ -109,7 +109,10 @@ def _to_u8(gray: np.ndarray) -> np.ndarray:
 
 
 def _smooth(gray: np.ndarray, sigma: float) -> np.ndarray:
-    return gaussian_blur(gray[..., None], sigma)[..., 0] if sigma > 0 else gray
+    # the project's Gaussian kernel (Eq. 10) and border, applied with OpenCV:
+    # equal to filters.gaussian_blur up to rounding, several times faster
+    # (it runs on every camera frame for the edge and Hough tools)
+    return fast_gaussian_blur(gray, sigma) if sigma > 0 else gray
 
 
 def gradient_magnitude(gray: np.ndarray, kx: np.ndarray, ky: np.ndarray) -> np.ndarray:

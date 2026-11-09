@@ -23,7 +23,26 @@ export const CAMERA_GROUPS = [
     id: "filters", label: "Filters",
     tools: ["arithmetic_mean", "geometric_mean", "harmonic_mean", "median", "minimum", "maximum", "midpoint"],
   },
+  { id: "advanced", label: "Advanced tools", tools: ["line_detection", "edge_detection", "corner_detection"] },
 ];
+
+// Detection tools draw on their result (red lines, edges, green circles).
+// A detection tool therefore replaces detection steps at the end of the
+// chain instead of running on their drawing.
+const DETECTION = new Set(["line_detection", "edge_detection", "corner_detection"]);
+
+function withoutTrailingDetection(chain) {
+  let end = chain.length;
+  while (end > 0 && DETECTION.has(chain[end - 1].type)) end -= 1;
+  return chain.slice(0, end);
+}
+
+// The chain plus the tool being adjusted on top of it.
+function frameOps(chain, tool, params, neutral, opParams) {
+  if (neutral) return chain;
+  const base = DETECTION.has(tool) ? withoutTrailingDetection(chain) : chain;
+  return [...base, { type: tool, params: opParams(tool, params) }];
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const newSeed = () => Math.floor(Math.random() * 2 ** 32);
@@ -158,7 +177,7 @@ export default function CameraPanel({
         try {
           if (!drawVideoFrame(videoRef.current, grab, MAX_SIDE)) { await sleep(30); continue; }
           const s = live.current;
-          const ops = s.neutral ? s.chain : [...s.chain, { type: s.tool, params: opParams(s.tool, s.params) }];
+          const ops = frameOps(s.chain, s.tool, s.params, s.neutral, opParams);
           const out = await processFrame(await canvasToJpeg(grab), freshSeeds(ops), { fast: true });
           if (!alive) break;
           const view = viewRef.current;
@@ -195,7 +214,7 @@ export default function CameraPanel({
 
   function addToChain() {
     if (live.current.neutral) return;
-    setChain((c) => [...c, { type: tool, params: opParams(tool, params) }]);
+    setChain((c) => frameOps(c, tool, params, false, opParams));
     setParams(defaultParams(tool, null));
   }
 
@@ -243,7 +262,8 @@ export default function CameraPanel({
         {t ? (
           <>
             <div className="formula">
-              <Formula tool={tool} params={params} img={null} />
+              {/* the frame size: the SHT vote threshold is a fraction of it */}
+              <Formula tool={tool} params={params} img={frameSize} />
               {t.eq && <span className="eqno">({t.eq})</span>}
             </div>
             <p className="hint"><TexBits text={t.describe} /></p>
