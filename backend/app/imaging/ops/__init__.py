@@ -14,6 +14,7 @@ from typing import Callable
 import numpy as np
 
 from . import basic, detection, filters, frequency, geometry, noise
+from . import fast as fast_ops
 from .geometry import OperationError
 
 
@@ -65,11 +66,14 @@ OPERATIONS: dict[str, OpSpec] = {
 }
 
 
-def run_pipeline(rgb: np.ndarray, alpha: np.ndarray | None, operations: list):
+def run_pipeline(rgb: np.ndarray, alpha: np.ndarray | None, operations: list,
+                 fast: bool = False):
     """Apply operations in order, starting from the original image.
 
     Returns (rgb, alpha). Geometric operations are applied to the alpha
     channel too; intensity operations and filters leave it unchanged.
+    With fast=True (the live camera) the window filters use the OpenCV
+    versions in fast.py: the same formulas, equal up to rounding.
     """
     out = rgb.astype(np.float64)
     a = alpha.astype(np.float64) if alpha is not None else None
@@ -80,7 +84,8 @@ def run_pipeline(rgb: np.ndarray, alpha: np.ndarray | None, operations: list):
             both = spec.fn(np.dstack([out, a]), **params)
             out, a = both[..., :3], both[..., 3]
         else:
-            out = spec.fn(out, **params)
+            fn = fast_ops.FAST.get(op.type, spec.fn) if fast else spec.fn
+            out = fn(out, **params)
     return out, (np.clip(a, 0, 255).astype(np.uint8) if a is not None else None)
 
 

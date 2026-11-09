@@ -179,10 +179,12 @@ async function serverProcess(imageId, operations) {
  * blob. Nothing is stored and, unlike the other calls, nothing is added to
  * the request log: this runs many times a second.
  */
-export async function processFrame(frame, operations) {
+export async function processFrame(frame, operations, { fast = false } = {}) {
   const form = new FormData();
   form.append("file", frame, "frame.jpg");
   form.append("operations", JSON.stringify(operations));
+  // fast: the window filters use their OpenCV versions (same formulas)
+  if (fast) form.append("fast", "true");
   let r;
   try {
     r = await fetch(`${API_URL}/process-frame`, { method: "POST", body: form });

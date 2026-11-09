@@ -2,12 +2,13 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import {
-  upload, uploadSample, uploadFromUrl, processImage, processFrame, fetchOriginal, exportImage, saveBlob, EXPORT_FORMATS,
+  upload, uploadSample, uploadFromUrl, processImage, fetchOriginal, exportImage, saveBlob, EXPORT_FORMATS,
   onStatus, checkBackend, API_URL,
 } from "./api.js";
 import { BUILTIN_SAMPLES } from "./builtinSamples.js";
 import { applyOp, sampleImage, gaussianKernel, rgbRange } from "./imageOps.js";
 import ComparePanel from "./Compare.jsx";
+import CameraPanel from "./Camera.jsx";
 
 // Tool definitions. `heavy` tools get a short delay before the preview is
 // computed so dragging a slider stays smooth. `backendOnly` tools are not
@@ -478,55 +479,7 @@ const PREVIEW_ON_OPEN = new Set([
 
 // these recompute only when Apply is pressed, never on a slider change.
 // Applying the same one again replaces the last step instead of stacking.
-// (With the live camera on they follow the sliders, since the view is live anyway.)
 const APPLY_ONLY = new Set(["line_detection", "edge_detection", "corner_detection"]);
-
-// ---------- live camera ----------
-// The camera runs at most this many pixels on the longest side: every frame
-// goes to the backend, and the filters take time in proportion to the pixels.
-const LIVE_MAX_SIDE = 640;
-const LIVE_JPEG_QUALITY = 0.8;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function cameraErrorMessage(e) {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    return "The camera needs a secure page: open the app at http://localhost:5173 or over https.";
-  }
-  switch (e?.name) {
-    case "NotAllowedError": return "Camera access was blocked. Allow it for this page and try again.";
-    case "NotFoundError": return "No camera was found on this device.";
-    case "NotReadableError": return "The camera is in use by another program.";
-    default: return `The camera could not be started${e?.message ? `: ${e.message}` : "."}`;
-  }
-}
-
-// Draws the current video frame on `canvas`, scaled to at most `maxSide`.
-// Returns false until the video has a picture.
-function drawVideoFrame(video, canvas, maxSide) {
-  if (!video || video.readyState < 2 || !video.videoWidth) return false;
-  const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
-  const w = Math.max(1, Math.round(video.videoWidth * scale));
-  const h = Math.max(1, Math.round(video.videoHeight * scale));
-  if (canvas.width !== w) canvas.width = w;
-  if (canvas.height !== h) canvas.height = h;
-  canvas.getContext("2d", { willReadFrequently: true }).drawImage(video, 0, 0, w, h);
-  return true;
-}
-
-const canvasToJpeg = (canvas, quality = LIVE_JPEG_QUALITY) =>
-  new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
-
-// The operation list for one live frame: the applied steps plus the tool being
-// adjusted, so the sliders show their effect on the camera view. Crop is
-// left out (its rectangle belongs to a still image); a detection tool already
-// applied last is replaced, as Apply would do.
-function liveOps(ops, tool, params, neutral) {
-  if (!tool || tool === "crop" || neutral) return ops;
-  const op = { type: tool, params: opParams(tool, params) };
-  const last = ops[ops.length - 1];
-  return APPLY_ONLY.has(tool) && last?.type === tool ? [...ops.slice(0, -1), op] : [...ops, op];
-}
 
 function defaultParams(tool, img) {
   const w = img ? img.width : 1, h = img ? img.height : 1;
@@ -1048,7 +1001,9 @@ function NumberField({ label, value, min, max, onChange }) {
   );
 }
 
-function ToolControls({ tool, params, setParams, img }) {
+// limits: largest slider values by key (the camera caps the window);
+// camera: hides the noise-pattern button, the camera draws a new one per frame
+function ToolControls({ tool, params, setParams, img, limits = {}, camera = false }) {
   const t = TOOLS[tool];
   if (tool === "crop") {
     const set = (k, v) => {
@@ -1123,7 +1078,9 @@ function ToolControls({ tool, params, setParams, img }) {
   const formatSlider = (s, value) =>
     s.key === "size" || s.key === "s_max" ? `${value} × ${value}` : s.step < 1 ? fmt(value, s.step < 0.1 ? 2 : 1) : value;
   // the largest d depends on the window: d < mn
-  const sliderMax = (s) => (tool === "alpha_trimmed_mean" && s.key === "d" ? params.size * params.size - 1 : s.max);
+  const sliderMax = (s) => (tool === "alpha_trimmed_mean" && s.key === "d"
+    ? params.size * params.size - 1
+    : Math.min(s.max, limits[s.key] ?? Infinity));
 
   return (
     <>
@@ -1255,7 +1212,7 @@ function ToolControls({ tool, params, setParams, img }) {
           {params.zero_mean && tool === "rayleigh_noise" && <p className="hint">Zero-mean mode: a has no effect.</p>}
         </>
       )}
-      {NOISE_TOOLS.has(tool) && (
+      {NOISE_TOOLS.has(tool) && !camera && (
         <div className="row">
           <button onClick={() => setParams({ ...params, seed: newSeed() })}>New noise pattern</button>
         </div>
@@ -1304,16 +1261,6 @@ export default function App() {
   const previewReq = useRef(0);
   // the result image whose Apply should leave the sliders alone (detection tools)
   const keepFor = useRef(null);
-
-  // live camera: `live` while frames are being processed, `liveView` holds the
-  // latest raw frame and its result for the two canvases
-  const [live, setLive] = useState(false);
-  const [liveView, setLiveView] = useState(null);
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const grabRef = useRef(null);
-  // the loop reads the newest steps and sliders from here instead of restarting
-  const liveState = useRef({});
 
   useEffect(() => onStatus(setBackend), []);
   useEffect(() => { checkBackend(); }, []);
@@ -1395,125 +1342,11 @@ export default function App() {
   }
 
   const neutral = isNeutral(tool, params, committed);
-  liveState.current = { ops, tool, params, neutral };
-
-  // The camera loop: grab a frame, send it with the current steps, show the
-  // result, and only then grab the next one. Frames that arrive while the
-  // backend is busy are never queued, so the picture stays current and the
-  // delay does not grow when a filter is slow.
-  useEffect(() => {
-    if (!live) return undefined;
-    let alive = true;
-    let smoothed = null;
-    let failing = false;
-    (async () => {
-      const canvas = grabRef.current || (grabRef.current = document.createElement("canvas"));
-      while (alive) {
-        if (document.hidden) { await sleep(300); continue; }
-        const started = performance.now();
-        try {
-          if (!drawVideoFrame(videoRef.current, canvas, LIVE_MAX_SIDE)) { await sleep(50); continue; }
-          const src = canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height);
-          const frame = await canvasToJpeg(canvas);
-          const s = liveState.current;
-          const out = await processFrame(frame, liveOps(s.ops, s.tool, s.params, s.neutral));
-          if (!alive) break;
-          const ms = performance.now() - started;
-          smoothed = smoothed === null ? ms : smoothed * 0.8 + ms * 0.2;
-          setLiveView({ src, out, ms: Math.round(smoothed) });
-          if (failing) { failing = false; setError(""); }
-        } catch (e) {
-          if (!alive) break;
-          failing = true;
-          setError(e.message);
-          await sleep(800);  // do not hammer the backend with a request that keeps failing
-        }
-        await sleep(0);
-      }
-    })();
-    return () => { alive = false; };
-  }, [live]);
-
-  // leaving the page releases the camera
-  useEffect(() => () => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-  }, []);
-
-  function stopCamera() {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setLive(false);
-    setLiveView(null);
-  }
-
-  // Opens the camera. With no image loaded yet, the first frame becomes the
-  // image, so the tools panel appears and the steps have a picture to refer to.
-  async function startCamera() {
-    setError("");
-    if (backend !== "server") {
-      setError("The live camera needs the backend. Start it and reload the page.");
-      return;
-    }
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      });
-    } catch (e) {
-      setError(cameraErrorMessage(e));
-      return;
-    }
-    const video = videoRef.current;
-    streamRef.current = stream;
-    video.srcObject = stream;
-    try {
-      await video.play();
-      while (video.readyState < 2) await sleep(30);
-      if (!original) {
-        const canvas = document.createElement("canvas");
-        drawVideoFrame(video, canvas, LIVE_MAX_SIDE);
-        const blob = await canvasToJpeg(canvas, 0.95);
-        const { imageId: id, image } = await upload(new File([blob], "camera.jpg", { type: "image/jpeg" }));
-        start(id, image, "Live camera. Press Capture frame to keep a still image.", "camera");
-      }
-      setLive(true);
-    } catch (e) {
-      stopCamera();
-      setError(e.message || cameraErrorMessage(e));
-    }
-  }
-
-  // Keeps the current camera frame as the image to work on, and stops the camera.
-  async function captureFrame() {
-    const video = videoRef.current;
-    const canvas = document.createElement("canvas");
-    if (!drawVideoFrame(video, canvas, 1600)) return;
-    setBusy(true);
-    try {
-      const blob = await canvasToJpeg(canvas, 0.95);
-      const { imageId: id, image } = await upload(new File([blob], "camera.jpg", { type: "image/jpeg" }));
-      stopCamera();
-      start(id, image, "Captured from the camera.", "camera");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   // live preview of the tool being adjusted
   useEffect(() => {
     if (!committed) return;
     clearTimeout(timer.current);
-    // the camera view already shows the tool on every frame
-    if (live) {
-      previewReq.current += 1;
-      setPreview(null);
-      setComputing(false);
-      return;
-    }
     // line, edge and corner detection run only from Apply, not from the sliders
     if (APPLY_ONLY.has(tool)) {
       previewReq.current += 1;
@@ -1560,7 +1393,7 @@ export default function App() {
       timer.current = setTimeout(run, 0);
     }
     return () => clearTimeout(timer.current);
-  }, [committed, tool, params, neutral, dirty, backend, imageId, ops, live]);
+  }, [committed, tool, params, neutral, dirty, backend, imageId, ops]);
 
   function start(id, img, note = "", name = "image", sampleId = "") {
     setImageId(id);
@@ -1577,7 +1410,6 @@ export default function App() {
 
   async function handleFile(file) {
     if (!file) return;
-    stopCamera();
     try {
       const { imageId: id, image, scaled } = await upload(file);
       start(id, image, scaled ? "Large image: reduced to 1600 px on the longest side." : "", file.name);
@@ -1587,7 +1419,6 @@ export default function App() {
   }
 
   async function loadBuiltin(sample) {
-    stopCamera();
     setSampleLoading(true);
     setError("");
     try {
@@ -1601,7 +1432,6 @@ export default function App() {
   }
 
   async function loadSample() {
-    stopCamera();
     try {
       const { imageId: id, image } = await uploadSample(sampleImage());
       start(id, image, "", "sample");
@@ -1711,16 +1541,12 @@ export default function App() {
 
   const t = tool ? TOOLS[tool] : null;
   const cat = CATEGORIES.find((c) => c.id === category);
-  const liveShown = live && liveView;
-  const shown = liveShown ? liveView.out : preview || committed;
-  const originalShown = liveShown ? liveView.src : original;
-  const processedNote = liveShown
-    ? `Live · ${(1000 / Math.max(liveView.ms, 1)).toFixed(1)} fps · ${liveView.ms} ms per frame`
-    : computing
-      ? "Computing preview…"
-      : preview
-        ? `Preview ${preview.width}×${preview.height}, not applied`
-        : committed ? `${committed.width}×${committed.height} · ${ops.length} step${ops.length === 1 ? "" : "s"}` : "";
+  const shown = preview || committed;
+  const processedNote = computing
+    ? "Computing preview…"
+    : preview
+      ? `Preview ${preview.width}×${preview.height}, not applied`
+      : committed ? `${committed.width}×${committed.height} · ${ops.length} step${ops.length === 1 ? "" : "s"}` : "";
 
   const exportFooter = committed && (
     <>
@@ -1735,14 +1561,12 @@ export default function App() {
             ))}
           </select>
         </label>
-        <button className="primary grow" onClick={handleExport} disabled={busy || live}>Download result</button>
+        <button className="primary grow" onClick={handleExport} disabled={busy}>Download result</button>
       </div>
       <p className="hint">
-        {live
-          ? "Press Capture frame to keep a still image, then download it."
-          : preview || (tool === "crop" && !neutral)
-            ? "Downloads the applied steps only. Apply or cancel the current change first."
-            : exported || `Saves the result of ${ops.length} applied step${ops.length === 1 ? "" : "s"}.`}
+        {preview || (tool === "crop" && !neutral)
+          ? "Downloads the applied steps only. Apply or cancel the current change first."
+          : exported || `Saves the result of ${ops.length} applied step${ops.length === 1 ? "" : "s"}.`}
       </p>
     </>
   );
@@ -1768,10 +1592,12 @@ export default function App() {
           className={view === "edit" ? "on" : ""} onClick={() => setView("edit")}>Edit</button>
         <button type="button" role="tab" aria-selected={view === "compare"}
           className={view === "compare" ? "on" : ""}
-          onClick={() => { stopCamera(); setView("compare"); }}>Compare</button>
+          onClick={() => setView("compare")}>Compare</button>
+        <button type="button" role="tab" aria-selected={view === "camera"}
+          className={view === "camera" ? "on" : ""} onClick={() => setView("camera")}>Camera</button>
       </div>
 
-      <SampleCarousel
+      {view !== "camera" && <SampleCarousel
         index={sampleIndex}
         onIndexChange={setSampleIndex}
         onSelect={loadBuiltin}
@@ -1782,9 +1608,23 @@ export default function App() {
           detail: `${committed.width}×${committed.height}`,
           image: committed,
         }) : null}
-      />
+      />}
 
-      {!original ? (
+      {view === "camera" ? (
+        <main>
+          <CameraPanel
+            tools={TOOLS}
+            defaultParams={defaultParams}
+            opParams={opParams}
+            isNeutral={isNeutral}
+            opLabel={opLabel}
+            ToolControls={ToolControls}
+            Formula={Formula}
+            TexBits={TexBits}
+            backend={backend}
+          />
+        </main>
+      ) : !original ? (
         <main className="empty">
           <div
             className={"drop" + (dragging ? " over" : "")}
@@ -1797,8 +1637,7 @@ export default function App() {
             <div className="row">
               <button className="primary" onClick={() => fileRef.current.click()}>Choose image</button>
               <button onClick={loadSample}>Use generated test image</button>
-              <button onClick={startCamera} disabled={backend !== "server"}
-                title={backend !== "server" ? "The live camera needs the backend" : undefined}>Use camera</button>
+              <button onClick={() => setView("camera")}>Use camera</button>
             </div>
             {error && <p className="error" role="alert">{error}</p>}
           </div>
@@ -1887,11 +1726,8 @@ export default function App() {
 
                         <ToolControls tool={tool} params={params} setParams={editParams} img={committed} />
 
-                        {APPLY_ONLY.has(tool) && !live && (
+                        {APPLY_ONLY.has(tool) && (
                           <p className="hint">The image updates only when you press Apply. Pressing Apply again replaces this step.</p>
-                        )}
-                        {live && (
-                          <p className="hint">Live: the camera view follows these controls. Apply adds the step to the history.</p>
                         )}
                         <div className="row">
                           <button className="primary" onClick={apply} disabled={neutral || busy}>Apply {t.label.toLowerCase()}</button>
@@ -1920,22 +1756,7 @@ export default function App() {
               <h3 className="gap">Image</h3>
               <div className="row">
                 <button onClick={() => fileRef.current.click()}>Load another image</button>
-                {live ? (
-                  <>
-                    <button className="primary" onClick={captureFrame} disabled={busy}>Capture frame</button>
-                    <button onClick={stopCamera}>Stop camera</button>
-                  </>
-                ) : (
-                  <button onClick={startCamera} disabled={backend !== "server"}
-                    title={backend !== "server" ? "The live camera needs the backend" : undefined}>Start camera</button>
-                )}
               </div>
-              {live && (
-                <p className="hint">
-                  The camera runs live at up to {LIVE_MAX_SIDE} px. The applied steps and the tool you are adjusting
-                  are processed on every frame; slow filters lower the frame rate.
-                </p>
-              )}
               {error && <p className="error" role="alert">{error}</p>}
             </div>
           </aside>
@@ -1945,9 +1766,9 @@ export default function App() {
               {notice && <p className="notice">{notice}</p>}
               <div className="pair">
                 <ImageCanvas
-                  image={originalShown}
-                  label={liveShown ? "Camera" : "Original"}
-                  note={`${originalShown.width}×${originalShown.height}`}
+                  image={original}
+                  label="Original"
+                  note={`${original.width}×${original.height}`}
                 />
                 <ImageCanvas
                   image={shown}
@@ -1966,10 +1787,6 @@ export default function App() {
           </div>
         </main>
       )}
-
-      {/* the camera feed; drawn from here onto a canvas, never shown itself */}
-      <video ref={videoRef} muted playsInline aria-hidden="true"
-        style={{ position: "fixed", width: 1, height: 1, opacity: 0, pointerEvents: "none" }} />
 
       <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/tiff,.tif,.tiff" hidden
         onChange={(e) => { handleFile(e.target.files[0]); e.target.value = ""; }} />

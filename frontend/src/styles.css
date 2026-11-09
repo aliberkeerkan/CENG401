@@ -233,6 +233,30 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .view-switch button { padding: 0.35rem 0.9rem; }
 .view-switch button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 600; }
 
+/* Camera tab: tools on the left, one live picture on the right with the
+   frame rate in its top-left corner */
+.camera-page { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1rem; align-items: start; }
+.camera-tools { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1rem); }
+.camera-tools .select { display: grid; gap: 0.3rem; margin-top: 0.2rem; }
+.camera-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.35rem; margin-bottom: 0.5rem; }
+.camera-groups .tool { text-align: center; padding-inline: 0.3rem; }
+.camera-chain li { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.camera-chain .icon-btn { width: 1.6rem; height: 1.6rem; font-size: 1.1rem; }
+.camera-frame { min-width: 0; }
+.camera-view { position: relative; display: grid; place-items: center; min-height: 360px;
+  background: #0b0f13; }
+.camera-picture { position: relative; line-height: 0; max-width: 100%; }
+.camera-view canvas { display: block; max-width: 100%; max-height: 78vh; width: auto; height: auto; }
+.camera-view .fps { position: absolute; top: 0.6rem; left: 0.6rem; padding: 0.2rem 0.55rem; border-radius: 6px;
+  background: rgba(0, 0, 0, 0.62); color: #7dffa0; font: 600 0.95rem/1.2 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums; pointer-events: none; }
+.camera-empty { text-align: center; color: #c9d3db; padding: 2rem; max-width: 46ch; }
+.camera-empty .hint { color: #8a97a3; }
+@media (max-width: 900px) {
+  .camera-page { grid-template-columns: minmax(0, 1fr); }
+  .camera-tools { position: static; }
+}
+
 .compare-page { margin-top: 1rem; }
 .compare-grid {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));

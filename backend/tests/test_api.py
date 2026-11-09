@@ -492,3 +492,19 @@ def test_corner_detection_through_api():
         op = {"type": "corner_detection", "params": params}
         r = client.post("/process", json={"image_id": image_id, "operations": [op]})
         assert r.status_code == 422, params
+
+
+def test_process_frame_fast_flag():
+    import json
+    arr = np.random.default_rng(21).integers(0, 256, (40, 60, 3), dtype=np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(arr).save(buf, format="JPEG", quality=95)
+    ops = [{"type": "median", "params": {"size": 3}}, {"type": "gaussian_blur", "params": {"sigma": 1.5}}]
+    out = {}
+    for fast in ("false", "true"):
+        r = client.post("/process-frame", files={"file": ("f.jpg", buf.getvalue(), "image/jpeg")},
+                        data={"operations": json.dumps(ops), "fast": fast})
+        assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+        out[fast] = decode(r).astype(int)
+    # same formulas: the two results differ only by rounding and JPEG
+    assert np.abs(out["true"][2:-2, 2:-2] - out["false"][2:-2, 2:-2]).mean() < 1.5

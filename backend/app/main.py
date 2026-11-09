@@ -99,7 +99,8 @@ def process(req: ProcessRequest):
 
 
 @app.post("/process-frame", response_class=Response)
-async def process_frame(file: UploadFile = File(...), operations: str = Form("[]")):
+async def process_frame(file: UploadFile = File(...), operations: str = Form("[]"),
+                        fast: bool = Form(False)):
     """Process one camera frame: the live camera view calls this many times a second.
 
     Nothing is stored. The frame (JPEG or PNG) comes with the full operation
@@ -123,7 +124,8 @@ async def process_frame(file: UploadFile = File(...), operations: str = Form("[]
         raise HTTPException(415, str(e)) from e
     try:
         # the pipeline is CPU work: keep the event loop free for other requests
-        out, out_alpha = await run_in_threadpool(run_pipeline, rgb, alpha, ops)
+        # fast=True (the Camera tab): the window filters use their OpenCV versions
+        out, out_alpha = await run_in_threadpool(run_pipeline, rgb, alpha, ops, fast)
     except OperationError as e:
         raise HTTPException(422, str(e)) from e
     return Response(imgio.encode(out, out_alpha, "jpeg", FRAME_JPEG_QUALITY), media_type="image/jpeg")

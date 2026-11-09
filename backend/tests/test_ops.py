@@ -881,3 +881,30 @@ def test_corner_detection_draws_green_circles_and_has_response_view():
         assert np.array_equal(out, detection.corner_detection(square, show=show))
     flat = np.full((40, 50, 3), 100.0)
     assert np.all(detection.corner_detection(flat) == 60)
+
+
+# ---------- fast (OpenCV) filters for the live camera ----------
+from app.imaging.ops import fast as fast_ops  # noqa: E402
+
+CAM = np.random.default_rng(20).integers(0, 256, (48, 64, 3)).astype(np.float64)
+
+
+@pytest.mark.parametrize("name,kw", [
+    ("gaussian_blur", {"sigma": 1.5}), ("gaussian_blur", {"sigma": 3.0}),
+    ("sharpen", {"amount": 1.0, "sigma": 1.5}),
+    ("arithmetic_mean", {"size": 5}), ("geometric_mean", {"size": 3}), ("harmonic_mean", {"size": 3}),
+    ("minimum", {"size": 5}), ("maximum", {"size": 5}), ("midpoint", {"size": 3}),
+])
+def test_fast_filters_equal_the_exact_ones_up_to_rounding(name, kw):
+    exact = getattr(filters, name)(CAM, **kw)
+    quick = fast_ops.FAST[name](CAM, **kw)
+    assert quick.shape == exact.shape
+    assert np.abs(quick - exact).max() <= 1
+
+
+def test_fast_median_equals_the_exact_one_away_from_the_border():
+    for size in (3, 5, 7):
+        r = size // 2
+        exact = filters.median(CAM, size)
+        quick = fast_ops.median(CAM, size)
+        assert np.array_equal(quick[r:-r, r:-r], exact[r:-r, r:-r])

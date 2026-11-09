@@ -40,7 +40,7 @@ pytest
 | POST | `/upload` | multipart `file` (JPEG, PNG, TIFF; max 20 MB) | `{ image_id, width, height, scaled, source_format }` |
 | GET | `/images/{image_id}/original` | – | `image/png` |
 | POST | `/process` | `{ image_id, operations: [{ type, params }] }` | `image/png` |
-| POST | `/process-frame` | multipart `file` (one camera frame, JPEG or PNG; max 8 MB) + `operations` (the same list as `/process`, as a JSON string) | `image/jpeg` |
+| POST | `/process-frame` | multipart `file` (one camera frame, JPEG or PNG; max 8 MB) + `operations` (the same list as `/process`, as a JSON string) + optional `fast` (true: window filters use their OpenCV versions in `ops/fast.py`, same formulas, equal up to rounding) | `image/jpeg` |
 | POST | `/export` | `{ image_id, operations, format: png \| jpeg \| tiff, quality }` | file download |
 
 | Group | Operation types and parameters |
