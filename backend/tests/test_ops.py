@@ -894,6 +894,12 @@ CAM = np.random.default_rng(20).integers(0, 256, (48, 64, 3)).astype(np.float64)
     ("sharpen", {"amount": 1.0, "sigma": 1.5}),
     ("arithmetic_mean", {"size": 5}), ("geometric_mean", {"size": 3}), ("harmonic_mean", {"size": 3}),
     ("minimum", {"size": 5}), ("maximum", {"size": 5}), ("midpoint", {"size": 3}),
+    ("denoise_uniform", {"size": 5}),
+    ("denoise_quantization", {"sigma": 1.5}), ("denoise_poisson", {"sigma": 1.5}),
+    ("denoise_gaussian", {"noise_std": 15, "size": 5}),
+    ("denoise_rayleigh", {"noise_std": 15, "size": 3}),
+    ("denoise_exponential", {"noise_std": 15, "size": 5}),
+    ("denoise_gamma", {"size": 3}),
 ])
 def test_fast_filters_equal_the_exact_ones_up_to_rounding(name, kw):
     exact = getattr(filters, name)(CAM, **kw)
@@ -908,3 +914,5 @@ def test_fast_median_equals_the_exact_one_away_from_the_border():
         exact = filters.median(CAM, size)
         quick = fast_ops.median(CAM, size)
         assert np.array_equal(quick[r:-r, r:-r], exact[r:-r, r:-r])
+        denoised = fast_ops.FAST["denoise_salt_pepper"](CAM, size)
+        assert np.array_equal(denoised[r:-r, r:-r], exact[r:-r, r:-r])

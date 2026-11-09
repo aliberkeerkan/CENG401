@@ -36,9 +36,11 @@ processed frames shown per second) in its top-left corner. `src/Camera.jsx`.
 
 Only tools that keep up with a live picture are offered: Basic tools (grayscale,
 brightness, contrast, Gaussian blur, sharpen), Noise (all seven models; random noise draws
-a new pattern on every frame) and Filters (mean, geometric, harmonic, median, min, max,
-midpoint, window up to 7 x 7) and Advanced tools (line, edge and corner detection with all
-their methods and views, including the Hough space). The open tool runs live; Add to chain
+a new pattern on every frame), Filters (mean, geometric, harmonic, median, min, max,
+midpoint, window up to 7 x 7), Frequency (band-reject, band-pass, Wiener and Kalman),
+Denoise (all eight noise-removal tools, with windows up to 7 x 7) and Advanced tools
+(line, edge and corner detection with all their methods and views, including the Hough
+space). The open tool runs live; Add to chain
 keeps it while another tool is tried, and the chain runs on every frame in order. A
 detection tool replaces detection steps at the end of the chain, so it never runs on another
 detector's drawing.

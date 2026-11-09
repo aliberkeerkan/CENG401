@@ -508,3 +508,30 @@ def test_process_frame_fast_flag():
         out[fast] = decode(r).astype(int)
     # same formulas: the two results differ only by rounding and JPEG
     assert np.abs(out["true"][2:-2, 2:-2] - out["false"][2:-2, 2:-2]).mean() < 1.5
+
+
+def test_process_frame_supports_frequency_and_denoise_tools():
+    arr = np.random.default_rng(22).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+    ops = [
+        {"type": "band_reject", "params": {"c0": 0.25, "width": 0.12, "kind": "butterworth", "n": 2}},
+        {"type": "band_pass", "params": {"c0": 0.25, "width": 0.12, "kind": "gaussian", "n": 2}},
+        {"type": "wiener", "params": {"noise_std": 20}},
+        {"type": "kalman", "params": {"q": 4, "r": 80}},
+        {"type": "denoise_salt_pepper", "params": {"size": 3}},
+        {"type": "denoise_uniform", "params": {"size": 3}},
+        {"type": "denoise_quantization", "params": {"sigma": 1}},
+        {"type": "denoise_poisson", "params": {"sigma": 1}},
+        {"type": "denoise_gaussian", "params": {"noise_std": 15, "size": 3}},
+        {"type": "denoise_rayleigh", "params": {"noise_std": 15, "size": 3}},
+        {"type": "denoise_exponential", "params": {"noise_std": 15, "size": 3}},
+        {"type": "denoise_gamma", "params": {"size": 3}},
+    ]
+    for op in ops:
+        r = client.post(
+            "/process-frame",
+            files={"file": ("frame.jpg", png_bytes(arr, "JPEG"), "image/jpeg")},
+            data={"operations": json.dumps([op]), "fast": "true"},
+        )
+        assert r.status_code == 200, (op["type"], r.text)
+        assert r.headers["content-type"] == "image/jpeg"
+        assert decode(r).shape == (48, 64, 3)

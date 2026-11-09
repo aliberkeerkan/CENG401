@@ -23,6 +23,15 @@ export const CAMERA_GROUPS = [
     id: "filters", label: "Filters",
     tools: ["arithmetic_mean", "geometric_mean", "harmonic_mean", "median", "minimum", "maximum", "midpoint"],
   },
+  {
+    id: "frequency", label: "Frequency",
+    tools: ["band_reject", "band_pass", "wiener", "kalman"],
+  },
+  {
+    id: "denoise", label: "Denoise",
+    tools: ["denoise_salt_pepper", "denoise_uniform", "denoise_quantization", "denoise_poisson",
+      "denoise_gaussian", "denoise_rayleigh", "denoise_exponential", "denoise_gamma"],
+  },
   { id: "advanced", label: "Advanced tools", tools: ["line_detection", "edge_detection", "corner_detection"] },
 ];
 
