@@ -90,7 +90,7 @@ const freshSeeds = (ops) => ops.map((op) => (
 ));
 
 export default function CameraPanel({
-  tools, defaultParams, opParams, isNeutral, opLabel, ToolControls, Formula, TexBits, backend,
+  tools, defaultParams, opParams, isNeutral, opLabel, ToolControls, Formula, TexBits, icons, backend,
 }) {
   const [devices, setDevices] = useState([]);
   const [deviceId, setDeviceId] = useState("");
@@ -101,7 +101,10 @@ export default function CameraPanel({
   const [frameSize, setFrameSize] = useState(null);
   // the applied chain, plus the tool being adjusted on top of it
   const [chain, setChain] = useState([]);
-  const [group, setGroup] = useState("basic");
+  // tools menu like the Edit view: the categories first, then one category's tools
+  const [group, setGroup] = useState(null);
+  // direction of the last move in the menu, for the slide animation
+  const [navDir, setNavDir] = useState("");
   const [tool, setTool] = useState(null);
   const [params, setParams] = useState({});
 
@@ -236,6 +239,19 @@ export default function CameraPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
+  function openGroup(id) {
+    setNavDir("forward");
+    setGroup(id);
+    setTool(null);
+  }
+
+  // back to the categories; the open tool closes, the chain stays
+  function backToGroups() {
+    setNavDir("back");
+    setGroup(null);
+    setTool(null);
+  }
+
   function chooseTool(t) {
     setTool(t);
     setParams(defaultParams(t, null));
@@ -274,38 +290,57 @@ export default function CameraPanel({
         {backend !== "server" && <p className="hint">The camera needs the backend.</p>}
         {error && <p className="error" role="alert">{error}</p>}
 
-        <h3 className="gap">Tools</h3>
-        <div className="camera-groups" role="tablist" aria-label="Tool groups">
-          {CAMERA_GROUPS.map((x) => (
-            <button key={x.id} role="tab" aria-selected={group === x.id}
-              className={"tool" + (group === x.id ? " on" : "")} onClick={() => setGroup(x.id)}>{x.label}</button>
-          ))}
-        </div>
-        <div className="tool-list" role="tablist" aria-label={g.label}>
-          {g.tools.map((k) => (
-            <button key={k} role="tab" aria-selected={tool === k}
-              className={"tool" + (tool === k ? " on" : "")} onClick={() => chooseTool(k)}>{tools[k].label}</button>
-          ))}
+        <div className="camera-tools-head">
+          <h3>{g ? g.label : "Tools"}</h3>
+          {g && (
+            <button type="button" className="icon-btn back" onClick={backToGroups}
+              aria-label="Back to categories" title="Back to categories">
+              {icons.back}
+            </button>
+          )}
         </div>
 
-        {t ? (
-          <>
-            <div className="formula">
-              {/* the frame size: the SHT vote threshold is a fraction of it */}
-              <Formula tool={tool} params={params} img={frameSize} />
-              {t.eq && <span className="eqno">({t.eq})</span>}
+        <div key={g ? g.id : "root"} className={"tools-view " + navDir}>
+          {!g ? (
+            <div className="category-list">
+              {CAMERA_GROUPS.map((c) => (
+                <button key={c.id} type="button" className="category" onClick={() => openGroup(c.id)}>
+                  <span className="category-icon">{icons[c.id]}</span>
+                  <span className="category-label">{c.label}</span>
+                  <span className="category-chevron">{icons.chevron}</span>
+                </button>
+              ))}
             </div>
-            <p className="hint"><TexBits text={t.describe} /></p>
-            <ToolControls tool={tool} params={params} setParams={setParams} img={null} limits={limits} camera />
-            <p className="hint">The camera shows this tool live. Add it to keep it while you try another one.</p>
-            <div className="row">
-              <button className="primary" onClick={addToChain} disabled={live.current.neutral}>Add to chain</button>
-              <button onClick={() => setTool(null)}>Close tool</button>
-            </div>
-          </>
-        ) : (
-          <p className="hint">Choose a tool to see its effect on the camera picture.</p>
-        )}
+          ) : (
+            <>
+              <div className="tool-list" role="tablist" aria-label={g.label}>
+                {g.tools.map((k) => (
+                  <button key={k} role="tab" aria-selected={tool === k}
+                    className={"tool" + (tool === k ? " on" : "")} onClick={() => chooseTool(k)}>{tools[k].label}</button>
+                ))}
+              </div>
+
+              {t ? (
+                <>
+                  <div className="formula">
+                    {/* the frame size: the SHT vote threshold is a fraction of it */}
+                    <Formula tool={tool} params={params} img={frameSize} />
+                    {t.eq && <span className="eqno">({t.eq})</span>}
+                  </div>
+                  <p className="hint"><TexBits text={t.describe} /></p>
+                  <ToolControls tool={tool} params={params} setParams={setParams} img={null} limits={limits} camera />
+                  <p className="hint">The camera shows this tool live. Add it to keep it while you try another one.</p>
+                  <div className="row">
+                    <button className="primary" onClick={addToChain} disabled={live.current.neutral}>Add to chain</button>
+                    <button onClick={() => setTool(null)}>Close tool</button>
+                  </div>
+                </>
+              ) : (
+                <p className="hint">Choose a tool to see its effect on the camera picture.</p>
+              )}
+            </>
+          )}
+        </div>
 
         <h3 className="gap">Chain</h3>
         {chain.length === 0 ? (

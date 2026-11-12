@@ -244,8 +244,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 }
 .camera-tools::-webkit-scrollbar { display: none; }
 .camera-tools .select { display: grid; gap: 0.3rem; margin-top: 0.2rem; }
-.camera-groups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.35rem; margin-bottom: 0.5rem; }
-.camera-groups .tool { text-align: center; padding-inline: 0.3rem; }
+/* the Tools heading of the camera panel, with the back arrow on its right
+   while a category is open (the menu itself reuses the Edit view's classes) */
+.camera-tools-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  margin: 1.4rem 0 0.6rem; min-height: 2.1rem; }
+.camera-tools-head h3 { margin: 0; }
 .camera-chain li { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .camera-chain .icon-btn { width: 1.6rem; height: 1.6rem; font-size: 1.1rem; }
 .camera-frame { min-width: 0; }
