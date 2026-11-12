@@ -289,6 +289,29 @@ export default function CameraPanel({
         <span className="tools-rail" aria-hidden="true">Tools</span>
 
         <div className="tools-body" id="camera-tools-body" inert={toolsOpen ? undefined : ""}>
+          {/* the camera first, then the tools menu, in the same panel */}
+          <div className="camera-device">
+            <h3>Camera</h3>
+            <label className="select">
+              <span>Device</span>
+              <select value={deviceId} disabled={starting || !devices.length}
+                onChange={(e) => { setDeviceId(e.target.value); if (running) start(e.target.value); }}>
+                {/* the browser lists the cameras only after camera permission */}
+                {!devices.length && <option value="">Default camera</option>}
+                {devices.map((d, i) => <option key={d.deviceId || i} value={d.deviceId}>{d.label || `Camera ${i + 1}`}</option>)}
+              </select>
+            </label>
+            <div className="row">
+              {running
+                ? <button onClick={stop}>Stop camera</button>
+                : <button className="primary" onClick={() => start()} disabled={starting || backend !== "server"}>
+                    {starting ? "Starting…" : "Start camera"}
+                  </button>}
+            </div>
+            {backend !== "server" && <p className="hint">The camera needs the backend.</p>}
+            {error && <p className="error" role="alert">{error}</p>}
+          </div>
+
           <div key={g ? g.id : "root"} className={"tools-view " + navDir}>
             {!g ? (
               <div className="category-list">
@@ -331,26 +354,6 @@ export default function CameraPanel({
             )}
           </div>
 
-
-          <h3 className="gap">Camera</h3>
-          <label className="select">
-            <span>Device</span>
-            <select value={deviceId} disabled={starting || !devices.length}
-              onChange={(e) => { setDeviceId(e.target.value); if (running) start(e.target.value); }}>
-              {/* the browser lists the cameras only after camera permission */}
-              {!devices.length && <option value="">Default camera</option>}
-              {devices.map((d, i) => <option key={d.deviceId || i} value={d.deviceId}>{d.label || `Camera ${i + 1}`}</option>)}
-            </select>
-          </label>
-          <div className="row">
-            {running
-              ? <button onClick={stop}>Stop camera</button>
-              : <button className="primary" onClick={() => start()} disabled={starting || backend !== "server"}>
-                  {starting ? "Starting…" : "Start camera"}
-                </button>}
-          </div>
-          {backend !== "server" && <p className="hint">The camera needs the backend.</p>}
-          {error && <p className="error" role="alert">{error}</p>}
 
           <h3 className="gap">Chain</h3>
           {chain.length === 0 ? (

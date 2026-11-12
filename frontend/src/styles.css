@@ -236,6 +236,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 /* Camera tab: the same sliding tools drawer as the Edit view (.work, .tools),
    one live picture on the right with the frame rate in its top-left corner */
 .camera-tools .select { display: grid; gap: 0.3rem; margin-top: 0.2rem; }
+/* the device and Start camera above the categories, set apart by a line */
+.camera-device { padding-bottom: 1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--line); }
+.camera-device h3 { margin-top: 0; }
 .camera-chain li { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .camera-chain .icon-btn { width: 1.6rem; height: 1.6rem; font-size: 1.1rem; }
 .camera-frame { min-width: 0; }
