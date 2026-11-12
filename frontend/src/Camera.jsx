@@ -91,6 +91,7 @@ const freshSeeds = (ops) => ops.map((op) => (
 
 export default function CameraPanel({
   tools, defaultParams, opParams, isNeutral, opLabel, ToolControls, Formula, TexBits, icons, backend,
+  toolsOpen, setToolsOpen,
 }) {
   const [devices, setDevices] = useState([]);
   const [deviceId, setDeviceId] = useState("");
@@ -268,30 +269,16 @@ export default function CameraPanel({
   const limits = { size: WINDOW_LIMIT };
 
   return (
-    <div className="camera-page">
-      <aside ref={panelRef} className="panel camera-tools" aria-label="Camera and tools">
-        <h3>Camera</h3>
-        <label className="select">
-          <span>Device</span>
-          <select value={deviceId} disabled={starting || !devices.length}
-            onChange={(e) => { setDeviceId(e.target.value); if (running) start(e.target.value); }}>
-            {/* the browser lists the cameras only after camera permission */}
-            {!devices.length && <option value="">Default camera</option>}
-            {devices.map((d, i) => <option key={d.deviceId || i} value={d.deviceId}>{d.label || `Camera ${i + 1}`}</option>)}
-          </select>
-        </label>
-        <div className="row">
-          {running
-            ? <button onClick={stop}>Stop camera</button>
-            : <button className="primary" onClick={() => start()} disabled={starting || backend !== "server"}>
-                {starting ? "Starting…" : "Start camera"}
-              </button>}
-        </div>
-        {backend !== "server" && <p className="hint">The camera needs the backend.</p>}
-        {error && <p className="error" role="alert">{error}</p>}
-
-        <div className="camera-tools-head">
-          <h3>{g ? g.label : "Tools"}</h3>
+    <div className={"camera-page work" + (toolsOpen ? "" : " tools-closed")}>
+      <aside ref={panelRef} className={"tools panel camera-tools" + (toolsOpen ? "" : " closed")} aria-label="Camera and tools">
+        {/* the same sliding drawer as the Edit view, open or closed in both */}
+        <div className="tools-head">
+          <button type="button" className="icon-btn" onClick={() => setToolsOpen((o) => !o)}
+            aria-expanded={toolsOpen} aria-controls="camera-tools-body"
+            aria-label={toolsOpen ? "Hide tools" : "Show tools"} title={toolsOpen ? "Hide tools" : "Show tools"}>
+            {icons.menu}
+          </button>
+          <h3 className="tools-title">{g ? g.label : "Tools"}</h3>
           {g && (
             <button type="button" className="icon-btn back" onClick={backToGroups}
               aria-label="Back to categories" title="Back to categories">
@@ -299,65 +286,89 @@ export default function CameraPanel({
             </button>
           )}
         </div>
+        <span className="tools-rail" aria-hidden="true">Tools</span>
 
-        <div key={g ? g.id : "root"} className={"tools-view " + navDir}>
-          {!g ? (
-            <div className="category-list">
-              {CAMERA_GROUPS.map((c) => (
-                <button key={c.id} type="button" className="category" onClick={() => openGroup(c.id)}>
-                  <span className="category-icon">{icons[c.id]}</span>
-                  <span className="category-label">{c.label}</span>
-                  <span className="category-chevron">{icons.chevron}</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <>
-              <div className="tool-list" role="tablist" aria-label={g.label}>
-                {g.tools.map((k) => (
-                  <button key={k} role="tab" aria-selected={tool === k}
-                    className={"tool" + (tool === k ? " on" : "")} onClick={() => chooseTool(k)}>{tools[k].label}</button>
+        <div className="tools-body" id="camera-tools-body" inert={toolsOpen ? undefined : ""}>
+          <div key={g ? g.id : "root"} className={"tools-view " + navDir}>
+            {!g ? (
+              <div className="category-list">
+                {CAMERA_GROUPS.map((c) => (
+                  <button key={c.id} type="button" className="category" onClick={() => openGroup(c.id)}>
+                    <span className="category-icon">{icons[c.id]}</span>
+                    <span className="category-label">{c.label}</span>
+                    <span className="category-chevron">{icons.chevron}</span>
+                  </button>
                 ))}
               </div>
+            ) : (
+              <>
+                <div className="tool-list" role="tablist" aria-label={g.label}>
+                  {g.tools.map((k) => (
+                    <button key={k} role="tab" aria-selected={tool === k}
+                      className={"tool" + (tool === k ? " on" : "")} onClick={() => chooseTool(k)}>{tools[k].label}</button>
+                  ))}
+                </div>
 
-              {t ? (
-                <>
-                  <div className="formula">
-                    {/* the frame size: the SHT vote threshold is a fraction of it */}
-                    <Formula tool={tool} params={params} img={frameSize} />
-                    {t.eq && <span className="eqno">({t.eq})</span>}
-                  </div>
-                  <p className="hint"><TexBits text={t.describe} /></p>
-                  <ToolControls tool={tool} params={params} setParams={setParams} img={null} limits={limits} camera />
-                  <p className="hint">The camera shows this tool live. Add it to keep it while you try another one.</p>
-                  <div className="row">
-                    <button className="primary" onClick={addToChain} disabled={live.current.neutral}>Add to chain</button>
-                    <button onClick={() => setTool(null)}>Close tool</button>
-                  </div>
-                </>
-              ) : (
-                <p className="hint">Choose a tool to see its effect on the camera picture.</p>
-              )}
-            </>
+                {t ? (
+                  <>
+                    <div className="formula">
+                      {/* the frame size: the SHT vote threshold is a fraction of it */}
+                      <Formula tool={tool} params={params} img={frameSize} />
+                      {t.eq && <span className="eqno">({t.eq})</span>}
+                    </div>
+                    <p className="hint"><TexBits text={t.describe} /></p>
+                    <ToolControls tool={tool} params={params} setParams={setParams} img={null} limits={limits} camera />
+                    <p className="hint">The camera shows this tool live. Add it to keep it while you try another one.</p>
+                    <div className="row">
+                      <button className="primary" onClick={addToChain} disabled={live.current.neutral}>Add to chain</button>
+                      <button onClick={() => setTool(null)}>Close tool</button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="hint">Choose a tool to see its effect on the camera picture.</p>
+                )}
+              </>
+            )}
+          </div>
+
+
+          <h3 className="gap">Camera</h3>
+          <label className="select">
+            <span>Device</span>
+            <select value={deviceId} disabled={starting || !devices.length}
+              onChange={(e) => { setDeviceId(e.target.value); if (running) start(e.target.value); }}>
+              {/* the browser lists the cameras only after camera permission */}
+              {!devices.length && <option value="">Default camera</option>}
+              {devices.map((d, i) => <option key={d.deviceId || i} value={d.deviceId}>{d.label || `Camera ${i + 1}`}</option>)}
+            </select>
+          </label>
+          <div className="row">
+            {running
+              ? <button onClick={stop}>Stop camera</button>
+              : <button className="primary" onClick={() => start()} disabled={starting || backend !== "server"}>
+                  {starting ? "Starting…" : "Start camera"}
+                </button>}
+          </div>
+          {backend !== "server" && <p className="hint">The camera needs the backend.</p>}
+          {error && <p className="error" role="alert">{error}</p>}
+
+          <h3 className="gap">Chain</h3>
+          {chain.length === 0 ? (
+            <p className="hint">No steps yet. Added tools run on every frame, in this order.</p>
+          ) : (
+            <ol className="history camera-chain">
+              {chain.map((op, i) => (
+                <li key={i}>
+                  <span><TexBits text={opLabel(op)} /></span>
+                  <button type="button" className="icon-btn" aria-label={`Remove step ${i + 1}`} title="Remove"
+                    onClick={() => setChain((c) => c.filter((_, j) => j !== i))}>×</button>
+                </li>
+              ))}
+            </ol>
           )}
-        </div>
-
-        <h3 className="gap">Chain</h3>
-        {chain.length === 0 ? (
-          <p className="hint">No steps yet. Added tools run on every frame, in this order.</p>
-        ) : (
-          <ol className="history camera-chain">
-            {chain.map((op, i) => (
-              <li key={i}>
-                <span><TexBits text={opLabel(op)} /></span>
-                <button type="button" className="icon-btn" aria-label={`Remove step ${i + 1}`} title="Remove"
-                  onClick={() => setChain((c) => c.filter((_, j) => j !== i))}>×</button>
-              </li>
-            ))}
-          </ol>
-        )}
-        <div className="row">
-          <button onClick={() => setChain([])} disabled={!chain.length}>Clear chain</button>
+          <div className="row">
+            <button onClick={() => setChain([])} disabled={!chain.length}>Clear chain</button>
+          </div>
         </div>
       </aside>
 

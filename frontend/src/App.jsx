@@ -1622,6 +1622,8 @@ export default function App() {
             Formula={Formula}
             TexBits={TexBits}
             icons={ICONS}
+            toolsOpen={toolsOpen}
+            setToolsOpen={setToolsOpen}
             backend={backend}
           />
         </main>

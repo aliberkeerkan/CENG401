@@ -233,22 +233,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .view-switch button { padding: 0.35rem 0.9rem; }
 .view-switch button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 600; }
 
-/* Camera tab: tools on the left, one live picture on the right with the
-   frame rate in its top-left corner */
-.camera-page { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1rem; align-items: start; }
-/* like the Edit tools panel: stays in view and scrolls on its own, scrollbar hidden */
-.camera-tools {
-  position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1rem);
-  max-height: calc(100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
-  overflow-y: auto; overflow-x: hidden; scrollbar-width: none;
-}
-.camera-tools::-webkit-scrollbar { display: none; }
+/* Camera tab: the same sliding tools drawer as the Edit view (.work, .tools),
+   one live picture on the right with the frame rate in its top-left corner */
 .camera-tools .select { display: grid; gap: 0.3rem; margin-top: 0.2rem; }
-/* the Tools heading of the camera panel, with the back arrow on its right
-   while a category is open (the menu itself reuses the Edit view's classes) */
-.camera-tools-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
-  margin: 1.4rem 0 0.6rem; min-height: 2.1rem; }
-.camera-tools-head h3 { margin: 0; }
 .camera-chain li { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .camera-chain .icon-btn { width: 1.6rem; height: 1.6rem; font-size: 1.1rem; }
 .camera-frame { min-width: 0; }
@@ -261,10 +248,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   font-variant-numeric: tabular-nums; pointer-events: none; }
 .camera-empty { text-align: center; color: #c9d3db; padding: 2rem; max-width: 46ch; }
 .camera-empty .hint { color: #8a97a3; }
-@media (max-width: 900px) {
-  .camera-page { grid-template-columns: minmax(0, 1fr); }
-  .camera-tools { position: static; max-height: none; overflow-y: visible; }
-}
 
 .compare-page { margin-top: 1rem; }
 .compare-grid {
